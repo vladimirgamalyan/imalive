@@ -1,0 +1,235 @@
+# imalive — an "I'm alive" heartbeat device on ESP32-C3
+
+Status: **concept** (implementation not started yet).
+
+Purpose: help an operator tell whether **mains power is present** at a remote
+location — but the device only ever asserts its own **liveness** ("I'm alive").
+Inferring "power is present" from that liveness is left to the human. This keeps
+the device honest: it never claims something it cannot actually know.
+
+## 1. Idea
+
+An ESP32-C3 device stays permanently plugged into a wall socket at the monitored
+location (home / cottage / office). It keeps a connection to Telegram and, as long
+as it is running, periodically reports **"I'm alive"** to a chat.
+
+**Core idea (inversion):** the device is powered by the same mains supply it helps
+monitor, so its own liveness carries the signal. If the device is alive and online,
+the operator can infer that power is present. We do not need a separate voltage
+sensor — the device's own power supply *is* what keeps it alive.
+
+The device deliberately reports **only liveness**, never "power is back". It cannot
+distinguish "no power" from "no internet" or "device hung" (see §7), so claiming
+anything about power directly would be misleading. The project name — *imalive* /
+"I'm alive" — matches exactly what the device asserts.
+
+## 2. What the observer sees
+
+- **Device comes online** → a **new** message arrives in the chat:
+  "I'm alive (online since 14:32)". This is the only sound-notification per
+  power-on.
+- **While the device is alive** → every N minutes it **edits that same message**
+  (via `editMessageText`), updating the "last seen" line. Editing a Telegram
+  message does **not** raise a new notification — so the chat is not spammed.
+- **Device stops** (power lost, internet lost, or a hang) → it goes silent and the
+  message "freezes" at its last "last seen" value.
+
+So the operator can always look at the last message and reason:
+"the device was definitely alive within the last N minutes" (fresh "last seen") or
+"the device went silent around HH:MM" (stale "last seen") — and from that infer
+whether power is present.
+
+### Message example
+
+Right after coming online:
+
+```
+I'm alive
+🕒 Online since: 24.07 14:32
+Last seen:      24.07 14:32
+```
+
+After a few heartbeats (same message, edited in place):
+
+```
+I'm alive
+🕒 Online since: 24.07 14:32
+Last seen:      24.07 16:02
+```
+
+If the device goes silent after 16:02, the message stays at "Last seen: 16:02" —
+the operator reads that as "the device (and therefore power) was present at least
+until ~16:02".
+
+> Note: the runtime wording and language of the Telegram messages is a product
+> choice, not fixed here. Russian is the natural default since the operator reads
+> them; the examples above are shown in English only to keep this doc consistent.
+
+## 3. Lifecycle (state machine)
+
+```
+[POWER ON]
+   │
+   ▼
+Connect to WiFi ──(failed)──► retry with backoff (router may still be booting)
+   │ (success)
+   ▼
+Time sync over NTP
+   │
+   ▼
+sendMessage("I'm alive …") ──► keep message_id in RAM
+   │
+   ▼
+┌─► wait N minutes
+│      │
+│      ▼
+│  editMessageText(message_id, "… Last seen: HH:MM")
+│      │  (edit error — see §7 fallback)
+└──────┘
+   ⋮
+[DEVICE STOPS] → device goes silent, sends nothing
+```
+
+Important consequence of the chosen model (**no NVS**): `message_id` lives only in
+RAM. After any restart (a real power loss OR a spontaneous reboot / watchdog) the
+device starts fresh and sends a **new** "I'm alive" message. This is exactly the
+behavior we want for a real power cycle — see the false-positive limitation in §7.
+
+## 4. Inferring power loss (from liveness)
+
+The device never sends a "power lost" message — when power drops at that location
+the router is usually unpowered too, so the device would not physically have time
+to send anything (a supercapacitor / power reserve was deliberately **not** added).
+Equally, the device never asserts "power is present"; it only asserts liveness.
+
+Power loss is **inferred by the human** from the "Last seen" line no longer
+updating. The **resolution** of that inference equals the heartbeat interval (N
+minutes): with N = 30 min the device went silent somewhere in the window
+[last "last seen"; last "last seen" + 30 min].
+
+By decision, the last heartbeat time is **not persisted to NVS**, so the device
+does not compute a silent-duration on the next start — it simply reports "I'm
+alive" again. The human estimates the gap by looking at the previous message in
+the chat history.
+
+## 5. Timings
+
+- **Online (liveness) detection latency**: practically instant — ESP boot time +
+  WiFi connect + NTP ≈ 10–30 s.
+- **Heartbeat interval (N)**: default **30 minutes** (candidates: 30 / 60),
+  exposed in config. Tradeoff: smaller N → fresher "last seen" and a tighter
+  silence estimate, but more Telegram API calls.
+
+## 6. Technical stack and hardware
+
+- **Board**: **ESP32-C3 SuperMini**, 2.4 GHz WiFi. Has an onboard blue LED
+  (GPIO8, active LOW) that can be used for status indication.
+- **Power**: from USB / a 5V adapter plugged into the monitored socket.
+- **Firmware**: C++ on the **Arduino framework** via **PlatformIO**.
+- **Telegram link**: HTTPS to `api.telegram.org` (TLS required —
+  `WiFiClientSecure`; either a root certificate or `setInsecure()`).
+  Two Bot API methods are enough: `sendMessage` and `editMessageText`.
+  A full bot library (e.g. UniversalTelegramBot) is optional — for a one-way
+  scenario a couple of HTTPS requests plus parsing `message_id` suffice.
+- **Time**: NTP (`pool.ntp.org`); timezone offset from config.
+
+### Expected project layout (PlatformIO)
+
+```
+imalive/
+├── platformio.ini
+├── include/
+│   ├── config.h            # secrets — not committed (.gitignore)
+│   └── config.example.h    # template without secrets — committed
+├── src/
+│   └── main.cpp
+└── CONCEPT.md
+```
+
+### config.h (draft fields)
+
+```cpp
+#define WIFI_SSID        "..."
+#define WIFI_PASSWORD    "..."
+#define TG_BOT_TOKEN     "123456:ABC..."
+#define TG_CHAT_ID       "-1001234567890"   // personal chat (positive id) OR channel (-100…)
+#define HEARTBEAT_MIN    30                  // heartbeat interval, minutes
+#define TZ_OFFSET_SEC    (3 * 3600)          // timezone, e.g. UTC+3
+#define DEVICE_NAME      "Cottage"           // caption in the message (optional)
+```
+
+Recipient (`TG_CHAT_ID`) — both variants are supported:
+
+- **Personal chat**: `chat_id` = the user's numeric id (obtained once, e.g. by
+  messaging the bot and reading `getUpdates`). The user must start the dialog with
+  the bot first.
+- **Channel**: `chat_id` of the form `-100…` (or `@username` for a public
+  channel). The bot must be **added to the channel as an administrator** with post
+  permission.
+
+Timezone and heartbeat interval are fully controlled from `config.h`
+(`TZ_OFFSET_SEC`, `HEARTBEAT_MIN`); changing them means editing the config and
+rebuilding (no over-the-air provisioning in the current concept).
+
+## 7. Edge cases and limitations (deliberate tradeoffs)
+
+1. **Device liveness ≠ power.** The device asserts only that it is alive. That can
+   mean "power present AND internet up AND firmware healthy" all at once — it
+   **cannot distinguish** "no power", "no internet/router" and "device hung". All
+   three read as "the heartbeat stopped updating". Reporting only liveness (rather
+   than "power is back") is the honest framing of exactly this limitation.
+
+2. **Spontaneous reboot (crash / watchdog), not a real outage.** Because state is
+   not stored in NVS, after such a reboot a new "I'm alive" arrives even though
+   power was never actually cut. A false positive. It could only be avoided by
+   persisting `message_id`/time to NVS, which was deliberately declined — accepted.
+
+3. **Router boots slower than the ESP.** After power returns the router may take
+   1–2 minutes to come up. WiFi connection must run in a retry loop (backoff)
+   rather than failing on the first attempt.
+
+4. **Long session and message-edit limits.** If the device stays alive for days,
+   the heartbeat keeps editing the same old message, which Telegram may refuse to
+   edit (the exact limit **must be verified** during implementation).
+   **Fallback:** if `editMessageText` returns an error (cannot edit) — send a fresh
+   message and keep editing that one. Optionally — a scheduled message rotation
+   once a day.
+
+5. **Telegram rate limits.** Edits every 30–60 minutes are far within the limits;
+   no issues expected.
+
+6. **WiFi drop without power loss.** Auto-reconnect within a session is needed so
+   the ability to heartbeat is not lost.
+
+7. **Always-on reliability.** Enable the hardware watchdog (auto-reboot on hang).
+   Optionally — status indication via the onboard LED (present on the SuperMini).
+
+## 8. Out of MVP scope (possible extensions)
+
+- **Inbound commands** (`/status`, `/ping`) via `getUpdates` long-polling — to poll
+  the device manually. The current scenario is strictly one-way (device → chat).
+- Storing silence history/durations (would require NVS).
+- An in-the-moment "power lost" notification (would require a supercapacitor +
+  brownout detection).
+- Multiple recipients / a dedicated channel.
+- Web-based setup (WiFi provisioning) instead of `config.h`.
+
+## 9. Agreed decisions and open parameters
+
+Decided:
+
+- Board — **ESP32-C3 SuperMini**.
+- The device reports **liveness only** ("I'm alive"), never "power is back"; the
+  operator infers power presence (ADR-0005).
+- Timezone and heartbeat interval — set in **`config.h`** (`TZ_OFFSET_SEC`,
+  `HEARTBEAT_MIN`); default interval — **30 minutes**.
+- Recipient — **personal chat OR channel** (see §6, both supported).
+
+Still open (can be decided during implementation):
+
+- The time-string format in the message (`24.07 14:32` — fine or otherwise).
+- Whether to use the onboard LED (GPIO8) for status indication.
+
+Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
+0003 (stateless / no NVS), 0004 (Telegram messaging model), 0005 (report liveness,
+not power).
