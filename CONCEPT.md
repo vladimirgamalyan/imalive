@@ -131,7 +131,8 @@ the chat history.
   Two Bot API methods are enough: `sendMessage` and `editMessageText`.
   A full bot library (e.g. UniversalTelegramBot) is optional — for a one-way
   scenario a couple of HTTPS requests plus parsing `message_id` suffice.
-- **Time**: NTP (`pool.ntp.org`); timezone offset from config.
+- **Time**: NTP (`pool.ntp.org`), DST-aware via a POSIX TZ string from config
+  (see "Time source" below).
 
 ### Expected project layout (PlatformIO)
 
@@ -154,7 +155,7 @@ imalive/
 #define TG_BOT_TOKEN     "123456:ABC..."
 #define TG_CHAT_ID       "-1001234567890"   // personal chat (positive id) OR channel (-100…)
 #define HEARTBEAT_MIN    30                  // heartbeat interval, minutes
-#define TZ_OFFSET_SEC    (3 * 3600)          // timezone, e.g. UTC+3
+#define TZ_STRING        "EET-2EEST,M3.5.0/3,M10.5.0/4"  // POSIX TZ, DST-aware; see "Time source"
 #define DEVICE_NAME      "Cottage"           // caption in the message (optional)
 ```
 
@@ -168,8 +169,34 @@ Recipient (`TG_CHAT_ID`) — both variants are supported:
   permission.
 
 Timezone and heartbeat interval are fully controlled from `config.h`
-(`TZ_OFFSET_SEC`, `HEARTBEAT_MIN`); changing them means editing the config and
+(`TZ_STRING`, `HEARTBEAT_MIN`); changing them means editing the config and
 rebuilding (no over-the-air provisioning in the current concept).
+
+### Time source
+
+The SuperMini has no battery-backed RTC, so the device knows nothing about the
+wall-clock time at boot. Time comes from the network on every start:
+
+1. Connect WiFi.
+2. Sync time over SNTP from `pool.ntp.org` (UTC), applying the POSIX `TZ_STRING`
+   so local time and DST transitions are handled automatically
+   (`configTzTime(TZ_STRING, "pool.ntp.org")` in Arduino).
+3. Only **after** a successful sync send the first "I'm alive" — never emit a
+   message with unsynced time. If SNTP has not answered yet, retry with backoff.
+
+During a session the internal timer keeps time between syncs (small drift); SNTP
+re-syncs periodically to correct it. After a power loss the device reboots and
+simply re-syncs — no RTC battery and no NVS are needed, consistent with the
+stateless model (ADR-0003).
+
+`TZ_STRING` is a POSIX TZ specification, e.g.:
+
+- `EET-2EEST,M3.5.0/3,M10.5.0/4` — Eastern European (UTC+2, DST → UTC+3).
+- `CET-1CEST,M3.5.0,M10.5.0/3` — Central European (UTC+1, DST → UTC+2).
+- `MSK-3` — Moscow, fixed UTC+3, no DST.
+
+Dependency note: NTP needs the network, but the device also needs the network to
+reach Telegram — so there is no case where it can report but cannot get the time.
 
 ## 7. Edge cases and limitations (deliberate tradeoffs)
 
@@ -221,8 +248,9 @@ Decided:
 - Board — **ESP32-C3 SuperMini**.
 - The device reports **liveness only** ("I'm alive"), never "power is back"; the
   operator infers power presence (ADR-0005).
-- Timezone and heartbeat interval — set in **`config.h`** (`TZ_OFFSET_SEC`,
-  `HEARTBEAT_MIN`); default interval — **30 minutes**.
+- Timezone and heartbeat interval — set in **`config.h`** (`TZ_STRING`,
+  `HEARTBEAT_MIN`); default interval — **30 minutes**. Timezone uses a DST-aware
+  POSIX TZ string (see §6 "Time source").
 - Recipient — **personal chat OR channel** (see §6, both supported).
 
 Still open (can be decided during implementation):
