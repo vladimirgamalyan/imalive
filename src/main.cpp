@@ -276,6 +276,26 @@ static bool tgEditMessage(long messageId, const String& text) {
   return response.indexOf("message is not modified") >= 0;
 }
 
+// Register the bot's command menu (setMyCommands) so the commands are discoverable
+// in the Telegram UI. Idempotent; called once per boot.
+static void tgSetCommands() {
+  JsonDocument doc;
+  JsonArray cmds = doc["commands"].to<JsonArray>();
+  JsonObject s = cmds.add<JsonObject>();
+  s["command"] = "status";
+  s["description"] = "Show device status";
+  JsonObject m = cmds.add<JsonObject>();
+  m["command"] = "mute";
+  m["description"] = "Mute startup notification";
+  JsonObject u = cmds.add<JsonObject>();
+  u["command"] = "unmute";
+  u["description"] = "Re-arm startup notification";
+  String body;
+  serializeJson(doc, body);
+  String response;
+  tgApiPost("setMyCommands", body, response);
+}
+
 // ---------------------------------------------------------------------------
 // Message content
 // ---------------------------------------------------------------------------
@@ -487,6 +507,7 @@ void setup() {
     Serial.printf("Resumed message id %ld\n", g_messageId);
   }
 
+  tgSetCommands();        // publish the command menu (/status, /mute, /unmute)
   drainPendingUpdates();  // ignore commands received before this boot
 
   g_lastHeartbeatMs = millis();

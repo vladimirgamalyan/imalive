@@ -105,7 +105,8 @@ arrive in your chat within a few seconds.
 ## Commands
 
 Direct-message the bot (only the user IDs in `TG_ADMIN_IDS` are answered; anyone
-else is ignored):
+else is ignored). The bot publishes these to its Telegram command menu on boot, so
+you can pick them from the `/` menu instead of typing:
 
 - `/status` — the device replies with its configuration (name, timezone, chat,
   WiFi SSID, admin IDs) and live state: firmware version, uptime, WiFi signal
