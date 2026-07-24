@@ -45,7 +45,7 @@ Right after coming online:
 
 ```
 I'm alive
-🕒 Online since: 24.07 14:32
+Online since: 24.07 14:32
 Last seen:      24.07 14:32
 ```
 
@@ -53,7 +53,7 @@ After a few heartbeats (same message, edited in place):
 
 ```
 I'm alive
-🕒 Online since: 24.07 14:32
+Online since: 24.07 14:32
 Last seen:      24.07 16:02
 ```
 

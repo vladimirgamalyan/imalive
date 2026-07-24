@@ -29,7 +29,7 @@ chat naturally becomes a log of power cycles. See [`CONCEPT.md`](CONCEPT.md) and
 
 ```
 I'm alive — The Fine Place Resort
-🕒 Online since: 24.07 14:32
+Online since: 24.07 14:32
 Last seen: 24.07 16:02
 ```
 
@@ -98,8 +98,8 @@ arrive in your chat within a few seconds.
 
 Direct-message the bot:
 
-- `/status` — the device replies with its uptime, WiFi signal (RSSI), IP address,
-  when it came online, and the current time.
+- `/status` — the device replies with its firmware version, uptime, WiFi signal
+  (RSSI), IP address, when it came online, and the current time.
 
 ## Timezone
 

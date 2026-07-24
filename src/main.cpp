@@ -24,6 +24,9 @@ static const uint32_t WDT_TIMEOUT_S = 60;
 static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
 static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 
+static const char* FW_VERSION  = "0.1.0";
+static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
+
 // Runtime state — RAM only, never persisted (ADR-0003: stateless, no NVS).
 static long g_messageId = -1;   // Telegram message id for the current power session
 static String g_onlineSince;    // local time this power session started
@@ -215,7 +218,7 @@ static String buildMessage(const String& lastSeen) {
     msg += " — ";  // em dash
     msg += DEVICE_NAME;
   }
-  msg += "\n\U0001F552 Online since: ";  // clock emoji
+  msg += "\nOnline since: ";
   msg += g_onlineSince;
   msg += "\nLast seen: ";
   msg += lastSeen;
@@ -237,6 +240,11 @@ static String buildStatusMessage() {
   msg += "\nUptime: " + formatUptime(millis());
   msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
   msg += "\nIP: " + WiFi.localIP().toString();
+  msg += "\nVersion: ";
+  msg += FW_VERSION;
+  msg += " (";
+  msg += BUILD_STAMP;
+  msg += ")";
   return msg;
 }
 
