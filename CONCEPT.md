@@ -199,6 +199,26 @@ stateless model (ADR-0003).
 Dependency note: NTP needs the network, but the device also needs the network to
 reach Telegram — so there is no case where it can report but cannot get the time.
 
+### Multiple devices and channels
+
+Several imalive devices can safely share one chat or channel. A device edits only
+the message it sent, addressed by the `message_id` returned from its own
+`sendMessage` — it never scans the chat or looks at other messages. So multiple
+imalive devices (and any unrelated bots posting to the same channel) never contend
+for the same message: `message_id` is unique per chat and each device holds its
+own. There is nothing to "figure out" at heartbeat time.
+
+Practical notes:
+
+- Give each device a distinct `DEVICE_NAME`. The firmware never relies on it — it
+  is purely for the human reader — but it turns a channel into a readable board:
+  `I'm alive — Cottage`, `I'm alive — Office`, ...
+- Because state is not persisted (ADR-0003), each power-on posts a new message and
+  edits that one; earlier messages freeze in place. In a channel this naturally
+  accumulates one frozen message per power cycle per device — the intended history.
+- If a device's message is deleted, its next edit fails and the fallback (ADR-0004)
+  posts a fresh message to continue from.
+
 ## 7. Edge cases and limitations (deliberate tradeoffs)
 
 1. **Device liveness ≠ power.** The device asserts only that it is alive. That can
