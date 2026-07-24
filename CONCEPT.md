@@ -255,8 +255,9 @@ Practical notes:
 
 ## 8. Out of MVP scope (possible extensions)
 
-- **Inbound commands** (`/status`, `/ping`) via `getUpdates` long-polling — to poll
-  the device manually. The current scenario is strictly one-way (device → chat).
+- **Further inbound commands** (e.g. `/ping`) beyond the implemented `/status`
+  (ADR-0007). `/status` polls `getUpdates` and replies with device state; the main
+  reporting flow is otherwise one-way (device → chat).
 - Storing silence history/durations (would require NVS).
 - An in-the-moment "power lost" notification (would require a supercapacitor +
   brownout detection).
@@ -283,4 +284,4 @@ Still open (can be decided during implementation):
 
 Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
 0003 (stateless / no NVS), 0004 (Telegram messaging model), 0005 (report liveness,
-not power), 0006 (time source: NTP + POSIX TZ).
+not power), 0006 (time source: NTP + POSIX TZ), 0007 (inbound /status command).

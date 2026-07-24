@@ -1,5 +1,7 @@
 # imalive
 
+[![build](https://github.com/vladimirgamalyan/imalive/actions/workflows/build.yml/badge.svg)](https://github.com/vladimirgamalyan/imalive/actions/workflows/build.yml)
+
 An **"I'm alive" heartbeat device** on an ESP32-C3 SuperMini. It helps you tell
 whether **mains power is present** at a remote location (home, cottage, office) —
 without any voltage sensor.
@@ -91,6 +93,13 @@ pio device monitor      # optional serial console (115200 baud)
 
 Watch the blue LED: once it stays solid, WiFi is up and the first message should
 arrive in your chat within a few seconds.
+
+## Commands
+
+Direct-message the bot:
+
+- `/status` — the device replies with its uptime, WiFi signal (RSSI), IP address,
+  when it came online, and the current time.
 
 ## Timezone
 

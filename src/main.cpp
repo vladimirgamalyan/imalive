@@ -22,11 +22,14 @@ static const uint32_t WIFI_BLINK_MS = 250;      // status-LED blink period while
 static const uint32_t NTP_TIMEOUT_MS = 30000;
 static const uint32_t WDT_TIMEOUT_S = 60;
 static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
+static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 
 // Runtime state — RAM only, never persisted (ADR-0003: stateless, no NVS).
 static long g_messageId = -1;   // Telegram message id for the current power session
 static String g_onlineSince;    // local time this power session started
 static uint32_t g_lastHeartbeatMs = 0;
+static long g_updateOffset = 0; // getUpdates acknowledge cursor (RAM only)
+static uint32_t g_lastPollMs = 0;
 
 // ---------------------------------------------------------------------------
 // Status LED
@@ -59,6 +62,18 @@ static String formatLocalTime() {
   }
   char buf[16];
   strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+  return String(buf);
+}
+
+// Human-readable uptime. Note: millis() wraps after ~49 days.
+static String formatUptime(uint32_t ms) {
+  uint32_t s = ms / 1000;
+  uint32_t d = s / 86400; s %= 86400;
+  uint32_t h = s / 3600;  s %= 3600;
+  uint32_t m = s / 60;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%lud %luh %lum",
+           (unsigned long)d, (unsigned long)h, (unsigned long)m);
   return String(buf);
 }
 
@@ -142,11 +157,8 @@ static bool tgApiPost(const char* method, const String& body, String& response) 
   return ok;
 }
 
-// Send a new message; returns its message_id, or -1 on failure.
-static long tgSendMessage(const String& text) {
-  JsonDocument doc;
-  doc["chat_id"] = TG_CHAT_ID;
-  doc["text"] = text;
+// Post a prepared sendMessage document; returns the new message_id, or -1.
+static long tgSendPrepared(JsonDocument& doc) {
   String body;
   serializeJson(doc, body);
 
@@ -162,6 +174,22 @@ static long tgSendMessage(const String& text) {
     return -1;
   }
   return res["result"]["message_id"].as<long>();
+}
+
+// Send a new message to the configured recipient; returns its message_id, or -1.
+static long tgSendMessage(const String& text) {
+  JsonDocument doc;
+  doc["chat_id"] = TG_CHAT_ID;
+  doc["text"] = text;
+  return tgSendPrepared(doc);
+}
+
+// Reply to a specific chat (used by command handling). Chat ids are 64-bit.
+static void tgReply(long long chatId, const String& text) {
+  JsonDocument doc;
+  doc["chat_id"] = chatId;
+  doc["text"] = text;
+  tgSendPrepared(doc);
 }
 
 // Edit an existing message in place; returns true on success.
@@ -192,6 +220,79 @@ static String buildMessage(const String& lastSeen) {
   msg += "\nLast seen: ";
   msg += lastSeen;
   return msg;
+}
+
+// ---------------------------------------------------------------------------
+// Inbound commands (/status)
+// ---------------------------------------------------------------------------
+
+static String buildStatusMessage() {
+  String msg = "Status";
+  if (strlen(DEVICE_NAME) > 0) {
+    msg += " — ";
+    msg += DEVICE_NAME;
+  }
+  msg += "\nOnline since: " + g_onlineSince;
+  msg += "\nNow: " + formatLocalTime();
+  msg += "\nUptime: " + formatUptime(millis());
+  msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
+  msg += "\nIP: " + WiFi.localIP().toString();
+  return msg;
+}
+
+// Advance the offset past any updates received before boot, so stale commands
+// are not answered. Offset lives in RAM only (ADR-0003).
+static void drainPendingUpdates() {
+  JsonDocument req;
+  req["timeout"] = 0;
+  req["offset"] = -1;  // return only the most recent update
+  String body;
+  serializeJson(req, body);
+
+  String response;
+  if (!tgApiPost("getUpdates", body, response)) {
+    return;
+  }
+  JsonDocument res;
+  if (deserializeJson(res, response) || !res["ok"].as<bool>()) {
+    return;
+  }
+  for (JsonObject upd : res["result"].as<JsonArray>()) {
+    g_updateOffset = upd["update_id"].as<long>() + 1;
+  }
+}
+
+// Short-poll getUpdates and reply to /status.
+static void pollCommands() {
+  JsonDocument req;
+  req["timeout"] = 0;  // return immediately with whatever is pending
+  if (g_updateOffset != 0) {
+    req["offset"] = g_updateOffset;
+  }
+  JsonArray allowed = req["allowed_updates"].to<JsonArray>();
+  allowed.add("message");
+  String body;
+  serializeJson(req, body);
+
+  String response;
+  if (!tgApiPost("getUpdates", body, response)) {
+    return;
+  }
+  JsonDocument res;
+  if (deserializeJson(res, response) || !res["ok"].as<bool>()) {
+    return;
+  }
+
+  for (JsonObject upd : res["result"].as<JsonArray>()) {
+    g_updateOffset = upd["update_id"].as<long>() + 1;  // acknowledge
+
+    const char* text = upd["message"]["text"] | "";
+    if (strncmp(text, "/status", 7) == 0) {
+      long long chatId = upd["message"]["chat"]["id"].as<long long>();
+      tgReply(chatId, buildStatusMessage());
+      Serial.printf("Replied to /status from chat %lld\n", chatId);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +339,10 @@ void setup() {
     Serial.println("Initial send failed; heartbeat will retry.");
   }
 
+  drainPendingUpdates();  // ignore commands received before this boot
+
   g_lastHeartbeatMs = millis();
+  g_lastPollMs = millis();
 }
 
 void loop() {
@@ -247,6 +351,11 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi lost; reconnecting...");
     connectWiFi();
+  }
+
+  if (millis() - g_lastPollMs >= CMD_POLL_MS) {
+    g_lastPollMs = millis();
+    pollCommands();
   }
 
   if (millis() - g_lastHeartbeatMs >= HEARTBEAT_MS) {
