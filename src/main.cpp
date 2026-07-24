@@ -30,6 +30,8 @@ static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 // Runtime state — RAM only, never persisted (ADR-0003: stateless, no NVS).
 static long g_messageId = -1;   // Telegram message id for the current power session
 static String g_onlineSince;    // local time this power session started
+static time_t g_onlineSinceEpoch = 0;  // wall-clock epoch when this session started
+static time_t g_bootEpoch = 0;  // wall-clock epoch of boot, for overflow-free uptime
 static uint32_t g_lastHeartbeatMs = 0;
 static long g_updateOffset = 0; // getUpdates acknowledge cursor (RAM only)
 static uint32_t g_lastPollMs = 0;
@@ -68,16 +70,24 @@ static String formatLocalTime() {
   return String(buf);
 }
 
-// Human-readable uptime. Note: millis() wraps after ~49 days.
-static String formatUptime(uint32_t ms) {
-  uint32_t s = ms / 1000;
-  uint32_t d = s / 86400; s %= 86400;
-  uint32_t h = s / 3600;  s %= 3600;
-  uint32_t m = s / 60;
+// Human-readable "Xd Xh Xm" from a whole-second span. uint32_t seconds spans
+// ~136 years, so this never wraps in practice.
+static String formatDuration(uint32_t seconds) {
+  uint32_t d = seconds / 86400; seconds %= 86400;
+  uint32_t h = seconds / 3600;  seconds %= 3600;
+  uint32_t m = seconds / 60;
   char buf[32];
   snprintf(buf, sizeof(buf), "%lud %luh %lum",
            (unsigned long)d, (unsigned long)h, (unsigned long)m);
   return String(buf);
+}
+
+// Human-readable span from an epoch timestamp up to now. Uses wall-clock time,
+// so it does not suffer the ~49-day millis() wrap.
+static String formatDurationSince(time_t start) {
+  time_t now = time(nullptr);
+  uint32_t seconds = (now > start) ? (uint32_t)(now - start) : 0;
+  return formatDuration(seconds);
 }
 
 // Start SNTP and block until the clock is set or NTP_TIMEOUT_MS elapses.
@@ -220,6 +230,7 @@ static String buildMessage(const String& lastSeen) {
   }
   msg += "\nOnline since: ";
   msg += g_onlineSince;
+  msg += " (" + formatDurationSince(g_onlineSinceEpoch) + " ago)";
   msg += "\nLast seen: ";
   msg += lastSeen;
   return msg;
@@ -237,7 +248,7 @@ static String buildStatusMessage() {
   }
   msg += "\nOnline since: " + g_onlineSince;
   msg += "\nNow: " + formatLocalTime();
-  msg += "\nUptime: " + formatUptime(millis());
+  msg += "\nUptime: " + formatDurationSince(g_bootEpoch);
   msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
   msg += "\nIP: " + WiFi.localIP().toString();
   msg += "\nVersion: ";
@@ -329,6 +340,8 @@ void setup() {
   }
 
   g_onlineSince = formatLocalTime();
+  g_onlineSinceEpoch = time(nullptr);
+  g_bootEpoch = g_onlineSinceEpoch - millis() / 1000;
   Serial.printf("Time synced. Online since %s\n", g_onlineSince.c_str());
 
   // One new message per power-on (ADR-0004). Retry a few times on a transient
