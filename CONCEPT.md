@@ -155,7 +155,7 @@ imalive/
 #define TG_BOT_TOKEN     "123456:ABC..."
 #define TG_CHAT_ID       "-1001234567890"   // personal chat (positive id) OR channel (-100…)
 #define HEARTBEAT_MIN    30                  // heartbeat interval, minutes
-#define TZ_STRING        "EET-2EEST,M3.5.0/3,M10.5.0/4"  // POSIX TZ, DST-aware; see "Time source"
+#define TZ_STRING        "ICT-7"                          // Asia/Bangkok (UTC+7, no DST); POSIX TZ — see "Time source"
 #define DEVICE_NAME      "Cottage"           // caption in the message (optional)
 ```
 
@@ -191,6 +191,7 @@ stateless model (ADR-0003).
 
 `TZ_STRING` is a POSIX TZ specification, e.g.:
 
+- `ICT-7` — Asia/Bangkok (UTC+7, no DST) — the value shipped in this project.
 - `EET-2EEST,M3.5.0/3,M10.5.0/4` — Eastern European (UTC+2, DST → UTC+3).
 - `CET-1CEST,M3.5.0,M10.5.0/3` — Central European (UTC+1, DST → UTC+2).
 - `MSK-3` — Moscow, fixed UTC+3, no DST.
@@ -260,4 +261,4 @@ Still open (can be decided during implementation):
 
 Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
 0003 (stateless / no NVS), 0004 (Telegram messaging model), 0005 (report liveness,
-not power).
+not power), 0006 (time source: NTP + POSIX TZ).
