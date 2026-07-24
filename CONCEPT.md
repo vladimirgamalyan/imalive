@@ -51,16 +51,16 @@ Right after coming online (`DEVICE_NAME` is the first line, omitted if unset; th
 
 ```
 Cottage
-On since: 24.07 14:32
-Last seen: 24.07 14:32 (updated every 30m)
+On since: 14:32 24 Jul
+Last seen: 14:32 24 Jul (updated every 30m)
 ```
 
 After a few heartbeats (same message, edited in place):
 
 ```
 Cottage
-On since: 24.07 14:32
-Last seen: 24.07 16:02 (updated every 30m)
+On since: 14:32 24 Jul
+Last seen: 16:02 24 Jul (updated every 30m)
 ```
 
 If the device goes silent after 16:02, the message stays at "Last seen: 16:02" —
@@ -305,7 +305,7 @@ Decided:
 
 Still open (can be decided during implementation):
 
-- The time-string format in the message (`24.07 14:32` — fine or otherwise).
+- The time-string format in the message (`16:30 24 Jul` — fine or otherwise).
 
 Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
 0003 (stateless / no NVS — **superseded by 0008**), 0004 (Telegram messaging

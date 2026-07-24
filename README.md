@@ -33,8 +33,8 @@ resumes the **same** message silently — no false "power is back" ping. Once
 
 ```
 The Fine Place Resort
-On since: 24.07 14:32
-Last seen: 24.07 16:02 (updated every 30m)
+On since: 14:32 24 Jul
+Last seen: 16:02 24 Jul (updated every 30m)
 ```
 
 The `On since` line appears only while notifications are armed (`/unmute`); a muted

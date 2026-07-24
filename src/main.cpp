@@ -70,10 +70,10 @@ static void ledToggle() {
 static String formatLocalTime() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
-    return String("--.-- --:--");
+    return String("--:-- -- ---");
   }
   char buf[16];
-  strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+  strftime(buf, sizeof(buf), "%H:%M %d %b", &timeinfo);
   return String(buf);
 }
 
@@ -82,7 +82,7 @@ static String formatLocalTimeAt(time_t t) {
   struct tm timeinfo;
   localtime_r(&t, &timeinfo);
   char buf[16];
-  strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+  strftime(buf, sizeof(buf), "%H:%M %d %b", &timeinfo);
   return String(buf);
 }
 
