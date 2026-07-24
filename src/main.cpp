@@ -230,7 +230,6 @@ static String buildMessage(const String& lastSeen) {
   }
   msg += "\nOnline since: ";
   msg += g_onlineSince;
-  msg += " (" + formatDurationSince(g_onlineSinceEpoch) + " ago)";
   msg += "\nLast seen: ";
   msg += lastSeen;
   return msg;
