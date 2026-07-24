@@ -119,3 +119,7 @@ src/main.cpp              firmware
 CONCEPT.md                design concept and tradeoffs
 docs/adr/                 architecture decision records
 ```
+
+## License
+
+[MIT](LICENSE) © Vladimir Gamalyan
