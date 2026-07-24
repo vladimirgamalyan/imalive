@@ -1,6 +1,8 @@
 # imalive — an "I'm alive" heartbeat device on ESP32-C3
 
-Status: **concept** (implementation not started yet).
+Status: **implemented**. This is the origin concept; where the firmware refined it,
+the `docs/adr/` records win — notably ADR-0008 changed the persistence and
+notification model described below.
 
 Purpose: help an operator tell whether **mains power is present** at a remote
 location — but the device only ever asserts its own **liveness** ("I'm alive").
@@ -25,9 +27,11 @@ anything about power directly would be misleading. The project name — *imalive
 
 ## 2. What the observer sees
 
-- **Device comes online** → a **new** message arrives in the chat:
-  "I'm alive (online since 14:32)". This is the only sound-notification per
-  power-on.
+- **Device comes online** → it reports "I'm alive (online since 14:32)". A genuine
+  mains power-on posts a **new** message and is the only sound-notification — and
+  only when notifications are *armed* (the device ships **muted**, ADR-0008). A
+  spontaneous reboot (watchdog / OTA) or a muted restart **resumes the existing
+  message** silently.
 - **While the device is alive** → every N minutes it **edits that same message**
   (via `editMessageText`), updating the "last seen" line. Editing a Telegram
   message does **not** raise a new notification — so the chat is not spammed.
@@ -77,23 +81,31 @@ Connect to WiFi ──(failed)──► retry with backoff (router may still be 
 Time sync over NTP
    │
    ▼
-sendMessage("I'm alive …") ──► keep message_id in RAM
+Load message_id / online_since / mute from NVS
+   │
+   ▼
+if (reset reason == POWER-ON) and (not muted):
+      sendMessage("I'm alive …", notify)    # new session; online_since = now
+else:                                        # watchdog / OTA / muted power-off
+      editMessageText(message_id, …)         # resume the existing message, silent
    │
    ▼
 ┌─► wait N minutes
 │      │
 │      ▼
 │  editMessageText(message_id, "… Last seen: HH:MM")
-│      │  (edit error — see §7 fallback)
+│      │  (edit error — §7 fallback: a fresh silent message)
 └──────┘
    ⋮
 [DEVICE STOPS] → device goes silent, sends nothing
 ```
 
-Important consequence of the chosen model (**no NVS**): `message_id` lives only in
-RAM. After any restart (a real power loss OR a spontaneous reboot / watchdog) the
-device starts fresh and sends a **new** "I'm alive" message. This is exactly the
-behavior we want for a real power cycle — see the false-positive limitation in §7.
+The boot is classified via `esp_reset_reason()` (ADR-0008): only a genuine
+`ESP_RST_POWERON` while un-muted starts a fresh, **notifying** session and resets
+"online since". Every other cause — watchdog, OTA, software restart — or a muted
+power-off **resumes** the persisted message in place, keeping "online since". The
+`message_id`, "online since" and mute flag survive in NVS; this is what fixes the
+spontaneous-reboot false positive once noted in §7.
 
 ## 4. Inferring power loss (from liveness)
 
@@ -107,10 +119,11 @@ updating. The **resolution** of that inference equals the heartbeat interval (N
 minutes): with N = 30 min the device went silent somewhere in the window
 [last "last seen"; last "last seen" + 30 min].
 
-By decision, the last heartbeat time is **not persisted to NVS**, so the device
-does not compute a silent-duration on the next start — it simply reports "I'm
-alive" again. The human estimates the gap by looking at the previous message in
-the chat history.
+The last heartbeat time is **not** persisted, so the device does not compute a
+silent-duration on the next start — only `message_id`, "online since" and the mute
+flag are kept (ADR-0008). On a real, un-muted power-on it posts a fresh message and
+the previous one freezes, so the human still estimates the gap from that frozen
+message in the chat history.
 
 ## 5. Timings
 
@@ -186,8 +199,8 @@ wall-clock time at boot. Time comes from the network on every start:
 
 During a session the internal timer keeps time between syncs (small drift); SNTP
 re-syncs periodically to correct it. After a power loss the device reboots and
-simply re-syncs — no RTC battery and no NVS are needed, consistent with the
-stateless model (ADR-0003).
+simply re-syncs — there is no RTC battery, so the wall clock always comes from the
+network. (Message state *is* kept in NVS — ADR-0008 — but the clock is not.)
 
 `TZ_STRING` is a POSIX TZ specification, e.g.:
 
@@ -213,11 +226,12 @@ Practical notes:
 - Give each device a distinct `DEVICE_NAME`. The firmware never relies on it — it
   is purely for the human reader — but it turns a channel into a readable board:
   `I'm alive — Cottage`, `I'm alive — Office`, ...
-- Because state is not persisted (ADR-0003), each power-on posts a new message and
-  edits that one; earlier messages freeze in place. In a channel this naturally
-  accumulates one frozen message per power cycle per device — the intended history.
-- If a device's message is deleted, its next edit fails and the fallback (ADR-0004)
-  posts a fresh message to continue from.
+- A device resumes its own message across reboots (`message_id` in NVS, ADR-0008)
+  and posts a new one only on a real, un-muted power cycle; earlier messages freeze
+  in place. In a channel this accumulates one frozen message per power cycle per
+  device — the intended history.
+- If a device's message is deleted or is past its edit window, the next edit fails
+  and the fallback (ADR-0004) posts a fresh **silent** message to continue from.
 
 ## 7. Edge cases and limitations (deliberate tradeoffs)
 
@@ -227,21 +241,25 @@ Practical notes:
    three read as "the heartbeat stopped updating". Reporting only liveness (rather
    than "power is back") is the honest framing of exactly this limitation.
 
-2. **Spontaneous reboot (crash / watchdog), not a real outage.** Because state is
-   not stored in NVS, after such a reboot a new "I'm alive" arrives even though
-   power was never actually cut. A false positive. It could only be avoided by
-   persisting `message_id`/time to NVS, which was deliberately declined — accepted.
+2. **Spontaneous reboot (crash / watchdog), not a real outage.** *Resolved
+   (ADR-0008).* The boot is classified via `esp_reset_reason()`: a watchdog / OTA /
+   software restart is **not** `ESP_RST_POWERON`, so the device resumes its message
+   (`message_id` from NVS) silently — no false "power is back". Only a genuine
+   power-on notifies.
 
 3. **Router boots slower than the ESP.** After power returns the router may take
    1–2 minutes to come up. WiFi connection must run in a retry loop (backoff)
    rather than failing on the first attempt.
 
-4. **Long session and message-edit limits.** If the device stays alive for days,
-   the heartbeat keeps editing the same old message, which Telegram may refuse to
-   edit (the exact limit **must be verified** during implementation).
+4. **Long session and message-edit limits.** *Verified (ADR-0009):* the Bot API
+   lets a bot edit its own message for **48 hours** in a private chat or group, but
+   a **channel** post has **no** such limit. So in a private chat the heartbeat's
+   edits start failing ~48 h after a message was posted; in a channel the same post
+   is edited indefinitely.
    **Fallback:** if `editMessageText` returns an error (cannot edit) — send a fresh
-   message and keep editing that one. Optionally — a scheduled message rotation
-   once a day.
+   message **silently** (`disable_notification`) and keep editing that one. Net
+   effect: a private-chat recipient accumulates roughly one silent message every
+   ~2 days; a channel recipient does not.
 
 5. **Telegram rate limits.** Edits every 30–60 minutes are far within the limits;
    no issues expected.
@@ -255,10 +273,11 @@ Practical notes:
 
 ## 8. Out of MVP scope (possible extensions)
 
-- **Further inbound commands** (e.g. `/ping`) beyond the implemented `/status`
-  (ADR-0007). `/status` polls `getUpdates` and replies with device state; the main
-  reporting flow is otherwise one-way (device → chat).
-- Storing silence history/durations (would require NVS).
+- **Further inbound commands** (e.g. `/ping`) beyond the implemented `/status`,
+  `/mute` and `/unmute` (ADR-0007, ADR-0008). These poll `getUpdates` and reply;
+  the main reporting flow is otherwise one-way (device → chat).
+- Storing silence history/durations (NVS currently holds only message state, not a
+  log of outages — ADR-0008).
 - An in-the-moment "power lost" notification (would require a supercapacitor +
   brownout detection).
 - Multiple recipients / a dedicated channel.
@@ -271,6 +290,10 @@ Decided:
 - Board — **ESP32-C3 SuperMini**.
 - The device reports **liveness only** ("I'm alive"), never "power is back"; the
   operator infers power presence (ADR-0005).
+- **Persistence & notification** — `message_id`, "online since" and a mute flag are
+  kept in NVS; the boot is classified via `esp_reset_reason()`, so only a genuine,
+  un-muted power-on notifies while soft reboots resume silently. `/mute` / `/unmute`
+  toggle it; the device ships muted (ADR-0008).
 - Timezone and heartbeat interval — set in **`config.h`** (`TZ_STRING`,
   `HEARTBEAT_MIN`); default interval — **30 minutes**. Timezone uses a DST-aware
   POSIX TZ string (see §6 "Time source").
@@ -283,5 +306,8 @@ Still open (can be decided during implementation):
 - The time-string format in the message (`24.07 14:32` — fine or otherwise).
 
 Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
-0003 (stateless / no NVS), 0004 (Telegram messaging model), 0005 (report liveness,
-not power), 0006 (time source: NTP + POSIX TZ), 0007 (inbound /status command).
+0003 (stateless / no NVS — **superseded by 0008**), 0004 (Telegram messaging
+model), 0005 (report liveness, not power), 0006 (time source: NTP + POSIX TZ),
+0007 (inbound `/status` command), 0008 (NVS persistence, reset-reason classifier,
+mute toggle), 0009 (edit window: 48 h chats / unlimited channels), 0010 (preserve
+NVS across repartition).

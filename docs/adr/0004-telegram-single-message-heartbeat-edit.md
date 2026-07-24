@@ -9,6 +9,9 @@
 > Refined by ADR-0008: the `message_id` now persists in NVS, so a soft reboot or
 > a muted planned restart resumes the same message instead of posting a new one;
 > the power-on notification is conditional (only a genuine, unmuted power-on).
+>
+> Edit-window risk (below) resolved by ADR-0009: editing is limited to 48 h in a
+> chat or group, but unlimited in a channel.
 
 ## Context
 

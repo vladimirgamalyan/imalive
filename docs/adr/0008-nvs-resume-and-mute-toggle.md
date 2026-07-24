@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-07-24
 
+> Refined by ADR-0010: how to preserve this NVS state across a partition-table
+> change.
+
 ## Context
 
 ADR-0003 kept the device stateless: `message_id` lived only in RAM, so *any*
