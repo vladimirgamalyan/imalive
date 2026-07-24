@@ -5,6 +5,10 @@
 
 > Message wording refined by ADR-0005: the "power is back" message is an
 > "I'm alive" message. The one-message-per-power-on lifecycle below is unchanged.
+>
+> Refined by ADR-0008: the `message_id` now persists in NVS, so a soft reboot or
+> a muted planned restart resumes the same message instead of posting a new one;
+> the power-on notification is conditional (only a genuine, unmuted power-on).
 
 ## Context
 

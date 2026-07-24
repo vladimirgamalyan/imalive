@@ -1,9 +1,11 @@
 // imalive — an "I'm alive" heartbeat device on ESP32-C3 SuperMini.
 //
-// On power-on the device connects to WiFi, syncs time over NTP, and sends one
-// "I'm alive" message to a Telegram chat. While it stays powered it edits that
-// same message every HEARTBEAT_MIN minutes (a silent heartbeat — no new
-// notification). When power is lost the device dies and the message freezes at
+// On a genuine power-on the device connects to WiFi, syncs time over NTP, and
+// sends an "I'm alive" message to a Telegram chat with a notification. While it
+// stays powered it edits that same message every HEARTBEAT_MIN minutes (a silent
+// heartbeat). The message_id is kept in NVS, so a soft reboot (watchdog / OTA)
+// or a planned muted restart silently resumes the same message instead of
+// pinging again. When power is lost the device dies and the message freezes at
 // its last "Last seen" value. See CONCEPT.md and docs/adr/ for the rationale.
 
 #include <Arduino.h>
@@ -12,7 +14,9 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <Preferences.h>
 #include "esp_task_wdt.h"
+#include "esp_system.h"
 
 #include "config.h"
 
@@ -27,11 +31,14 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 static const char* FW_VERSION  = "0.1.0";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 
-// Runtime state — RAM only, never persisted (ADR-0003: stateless, no NVS).
-static long g_messageId = -1;   // Telegram message id for the current power session
-static String g_onlineSince;    // local time this power session started
-static time_t g_onlineSinceEpoch = 0;  // wall-clock epoch when this session started
-static time_t g_bootEpoch = 0;  // wall-clock epoch of boot, for overflow-free uptime
+// Runtime state. The tracked message_id, the session's "online since", and the
+// startup-ping mute flag survive reboots in NVS (see the Persistent state
+// section); everything else is RAM only.
+static long g_messageId = -1;   // Telegram message id of the tracked message (NVS)
+static String g_onlineSince;    // local-time string of the session start
+static time_t g_onlineSinceEpoch = 0;  // session start epoch, persistent across reboots (NVS)
+static time_t g_bootEpoch = 0;  // epoch of this boot, for uptime-since-boot
+static bool g_muted = true;     // if set, a power-on resumes silently — no ping (NVS); muted by default
 static uint32_t g_lastHeartbeatMs = 0;
 static long g_updateOffset = 0; // getUpdates acknowledge cursor (RAM only)
 static uint32_t g_lastPollMs = 0;
@@ -65,6 +72,15 @@ static String formatLocalTime() {
   if (!getLocalTime(&timeinfo)) {
     return String("--.-- --:--");
   }
+  char buf[16];
+  strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+  return String(buf);
+}
+
+// Format an arbitrary epoch as local "dd.mm HH:MM" (for a stored session start).
+static String formatLocalTimeAt(time_t t) {
+  struct tm timeinfo;
+  localtime_r(&t, &timeinfo);
   char buf[16];
   strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
   return String(buf);
@@ -137,6 +153,34 @@ static void connectWiFi() {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent state (NVS)
+// A power loss wipes RAM, so the tracked message_id, the session's "online
+// since", and the mute flag live in NVS. Writes happen only when a new message
+// is created or the mute flag is toggled — rare, so flash wear is negligible.
+// This narrows ADR-0003 (see ADR-0008).
+// ---------------------------------------------------------------------------
+
+static Preferences g_prefs;
+
+// Open NVS and load the persisted state into the globals.
+static void stateBegin() {
+  g_prefs.begin("imalive", false);
+  g_messageId = g_prefs.getLong("msg_id", -1);
+  g_onlineSinceEpoch = (time_t)g_prefs.getLong64("since", 0);
+  g_muted = g_prefs.getBool("muted", true);  // muted by default: silent until /unmute
+}
+
+// Persist the tracked message and its session start (after creating a message).
+static void saveSession() {
+  g_prefs.putLong("msg_id", (int32_t)g_messageId);
+  g_prefs.putLong64("since", (int64_t)g_onlineSinceEpoch);
+}
+
+static void saveMuted() {
+  g_prefs.putBool("muted", g_muted);
+}
+
+// ---------------------------------------------------------------------------
 // Telegram Bot API
 // ---------------------------------------------------------------------------
 
@@ -190,10 +234,14 @@ static long tgSendPrepared(JsonDocument& doc) {
 }
 
 // Send a new message to the configured recipient; returns its message_id, or -1.
-static long tgSendMessage(const String& text) {
+// When silent, Telegram delivers it without a notification (disable_notification).
+static long tgSendMessage(const String& text, bool silent) {
   JsonDocument doc;
   doc["chat_id"] = TG_CHAT_ID;
   doc["text"] = text;
+  if (silent) {
+    doc["disable_notification"] = true;
+  }
   return tgSendPrepared(doc);
 }
 
@@ -250,6 +298,7 @@ static String buildStatusMessage() {
   msg += "\nNow: " + formatLocalTime();
   msg += "\nUptime: " + formatDurationSince(g_bootEpoch);
   msg += "\nHeartbeat: every " + String(HEARTBEAT_MIN) + "m";
+  msg += "\nMute: " + String(g_muted ? "on" : "off");
   msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
   msg += "\nIP: " + WiFi.localIP().toString();
   msg += "\nVersion: ";
@@ -307,10 +356,20 @@ static void pollCommands() {
     g_updateOffset = upd["update_id"].as<long>() + 1;  // acknowledge
 
     const char* text = upd["message"]["text"] | "";
+    long long chatId = upd["message"]["chat"]["id"].as<long long>();
     if (strncmp(text, "/status", 7) == 0) {
-      long long chatId = upd["message"]["chat"]["id"].as<long long>();
       tgReply(chatId, buildStatusMessage());
       Serial.printf("Replied to /status from chat %lld\n", chatId);
+    } else if (strncmp(text, "/mute", 5) == 0) {
+      g_muted = true;
+      saveMuted();
+      tgReply(chatId, "Startup ping muted — safe to power off now. Send /unmute to re-arm.");
+      Serial.println("Muted startup ping");
+    } else if (strncmp(text, "/unmute", 7) == 0) {
+      g_muted = false;
+      saveMuted();
+      tgReply(chatId, "Startup ping armed. The next real power-on will notify.");
+      Serial.println("Armed startup ping");
     }
   }
 }
@@ -331,6 +390,8 @@ void setup() {
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   esp_task_wdt_add(NULL);
 
+  stateBegin();  // load persisted message_id / online-since / mute flag
+
   connectWiFi();
 
   // Never announce with a wrong clock: if NTP does not sync, restart and retry.
@@ -340,25 +401,49 @@ void setup() {
     ESP.restart();
   }
 
-  g_onlineSince = formatLocalTime();
-  g_onlineSinceEpoch = time(nullptr);
-  g_bootEpoch = g_onlineSinceEpoch - millis() / 1000;
-  Serial.printf("Time synced. Online since %s\n", g_onlineSince.c_str());
+  g_bootEpoch = time(nullptr);  // uptime is measured from this boot
 
-  // One new message per power-on (ADR-0004). Retry a few times on a transient
-  // failure; otherwise the heartbeat below keeps trying.
-  String text = buildMessage(g_onlineSince);
-  for (int i = 0; i < 3 && g_messageId <= 0; i++) {
-    g_messageId = tgSendMessage(text);
-    if (g_messageId <= 0) {
-      delay(2000);
-      esp_task_wdt_reset();
-    }
+  // A genuine power-on (mains returned) with notifications armed is the only
+  // event that announces with a sound. A soft reboot (watchdog / OTA) or a
+  // planned muted restart instead silently resumes the existing message and
+  // keeps the persistent "online since". See ADR-0008.
+  esp_reset_reason_t reason = esp_reset_reason();
+  bool announce = (reason == ESP_RST_POWERON) && !g_muted;
+
+  if (announce || g_onlineSinceEpoch <= 0) {
+    g_onlineSinceEpoch = time(nullptr);  // fresh session (or first boot ever)
   }
-  if (g_messageId > 0) {
-    Serial.printf("Sent 'I'm alive', message id %ld\n", g_messageId);
+  g_onlineSince = formatLocalTimeAt(g_onlineSinceEpoch);
+  Serial.printf("Boot: reason %d, muted %d, online since %s\n",
+                (int)reason, (int)g_muted, g_onlineSince.c_str());
+
+  String text = buildMessage(formatLocalTime());
+
+  // Continuation first: try to resume (edit) the existing message silently.
+  bool resumed = !announce && g_messageId > 0 && tgEditMessage(g_messageId, text);
+
+  if (!resumed) {
+    // A new message is needed. It carries a notification only on an armed
+    // power-on; every other case (soft reboot, muted, or a missing message) is
+    // sent silently, exactly like a heartbeat edit.
+    bool silent = !announce;
+    long id = -1;
+    for (int i = 0; i < 3 && id <= 0; i++) {
+      id = tgSendMessage(text, silent);
+      if (id <= 0) {
+        delay(2000);
+        esp_task_wdt_reset();
+      }
+    }
+    if (id > 0) {
+      g_messageId = id;
+      saveSession();
+      Serial.printf("Sent %s message, id %ld\n", silent ? "silent" : "notifying", id);
+    } else {
+      Serial.println("Initial send failed; heartbeat will retry.");
+    }
   } else {
-    Serial.println("Initial send failed; heartbeat will retry.");
+    Serial.printf("Resumed message id %ld\n", g_messageId);
   }
 
   drainPendingUpdates();  // ignore commands received before this boot
@@ -389,11 +474,12 @@ void loop() {
     bool ok = (g_messageId > 0) && tgEditMessage(g_messageId, text);
     if (!ok) {
       // Fallback (ADR-0004): message too old to edit, or never sent — send a
-      // fresh one and keep editing that from now on.
-      Serial.println("Edit failed; sending a fresh message.");
-      long newId = tgSendMessage(text);
+      // fresh one silently (no restart happened) and keep editing that one.
+      Serial.println("Edit failed; sending a fresh (silent) message.");
+      long newId = tgSendMessage(text, true);
       if (newId > 0) {
         g_messageId = newId;
+        saveSession();
       }
     }
     Serial.printf("Heartbeat: last seen %s (message id %ld)\n", lastSeen.c_str(), g_messageId);

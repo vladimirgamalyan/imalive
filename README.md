@@ -13,16 +13,19 @@ alive**, and you infer the rest.
 
 ## How it works
 
-1. On power-on it connects to WiFi, syncs the clock over NTP, and sends **one**
-   Telegram message: `I'm alive — <name>` with the time it came online.
+1. On a genuine power-on it connects to WiFi, syncs the clock over NTP, and sends
+   a Telegram message: `I'm alive — <name>` with the time it came online. It ships
+   **muted** (silent); send `/unmute` once so that real power-ons notify.
 2. While powered, every `HEARTBEAT_MIN` minutes it **edits that same message** to
    refresh a `Last seen` line. Editing raises **no** notification, so the chat is
    not spammed.
 3. When power drops, the device dies and the message **freezes** at its last
    `Last seen` — telling you until when power (and the device) was definitely there.
 
-Each power-on posts a new message; the device keeps no state across reboots, so the
-chat naturally becomes a log of power cycles. See [`CONCEPT.md`](CONCEPT.md) and the
+The `message_id` is kept in flash (NVS), so a spontaneous reboot (watchdog / OTA)
+resumes the **same** message silently — no false "power is back" ping. Once
+`/unmute`d, a real power-on notifies; you can `/mute` again for planned downtime
+(see [Commands](#commands)). See [`CONCEPT.md`](CONCEPT.md) and the
 [decision records](docs/adr/) for the full rationale.
 
 ### Message example
@@ -30,7 +33,7 @@ chat naturally becomes a log of power cycles. See [`CONCEPT.md`](CONCEPT.md) and
 ```
 I'm alive — The Fine Place Resort
 Online since: 24.07 14:32
-Last seen: 24.07 16:02
+Last seen: 24.07 16:02 (updated every 30m)
 ```
 
 ## Hardware
@@ -99,7 +102,13 @@ arrive in your chat within a few seconds.
 Direct-message the bot:
 
 - `/status` — the device replies with its firmware version, uptime, WiFi signal
-  (RSSI), IP address, when it came online, and the current time.
+  (RSSI), IP address, when it came online, the current time, and whether startup
+  pings are muted.
+- `/mute` — silence the notification on the next power-on. Send this **before** a
+  planned power-off (reflashing, moving sockets); wait for the reply, then power
+  down. The device resumes its message silently on the next start.
+- `/unmute` — arm startup notifications (the device ships muted), so the next real
+  power-on pings again.
 
 ## Timezone
 
@@ -115,9 +124,9 @@ automatically. Examples:
 
 By design the device cannot distinguish **no power** from **no internet** or a
 **hang** — all three simply stop the heartbeat. It also does not send an
-in-the-moment "power lost" message (no supercapacitor), and a spontaneous reboot
-looks like a real power cycle. These are deliberate tradeoffs; see
-[`CONCEPT.md` §7](CONCEPT.md) and the [ADRs](docs/adr/).
+in-the-moment "power lost" message (no supercapacitor), and a full but very brief
+outage (a few seconds) still counts as a real power-on. These are deliberate
+tradeoffs; see [`CONCEPT.md` §7](CONCEPT.md) and the [ADRs](docs/adr/).
 
 ## Repository layout
 

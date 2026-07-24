@@ -1,7 +1,11 @@
 # 0003. Operate statelessly — do not persist state to NVS
 
-- Status: Accepted
+- Status: Superseded by ADR-0008
 - Date: 2026-07-24
+
+> Superseded by ADR-0008: the device now persists a small amount of state
+> (`message_id`, `online_since`, mute flag) to NVS. The rare-write reasoning in
+> this ADR still holds — the heartbeat `Last seen` is never persisted.
 
 ## Context
 
