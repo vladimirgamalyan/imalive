@@ -38,7 +38,7 @@ Last seen: 16:02 24 Jul (updated every 30m)
 ```
 
 The `On since` line appears only while notifications are armed (`/unmute`); a muted
-device shows just `Last seen`.
+device shows just `Last seen`. The time renders in **bold**.
 
 ## Hardware
 

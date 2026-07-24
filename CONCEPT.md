@@ -47,7 +47,7 @@ whether power is present.
 
 Right after coming online (`DEVICE_NAME` is the first line, omitted if unset; the
 `On since` line appears only when armed / un-muted; a muted device shows just
-`Last seen`):
+`Last seen`; the time renders in **bold**):
 
 ```
 Cottage

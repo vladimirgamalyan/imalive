@@ -21,7 +21,7 @@
 
 // --- Behaviour ---
 #define HEARTBEAT_MIN  30      // heartbeat interval, minutes
-#define DEVICE_NAME    ""      // optional label shown in the message, e.g. "Cottage"
+#define DEVICE_NAME    ""      // optional label in the message, e.g. "Cottage" (avoid < > &)
 
 // --- Timezone (POSIX TZ string, DST-aware; see CONCEPT.md "Time source") ---
 // Asia/Bangkok, UTC+7, no DST.

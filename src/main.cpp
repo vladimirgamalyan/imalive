@@ -243,6 +243,7 @@ static long tgSendMessage(const String& text, bool silent) {
   JsonDocument doc;
   doc["chat_id"] = TG_CHAT_ID;
   doc["text"] = text;
+  doc["parse_mode"] = "HTML";  // the heartbeat message uses <b> for the time
   if (silent) {
     doc["disable_notification"] = true;
   }
@@ -263,6 +264,7 @@ static bool tgEditMessage(long messageId, const String& text) {
   doc["chat_id"] = TG_CHAT_ID;
   doc["message_id"] = messageId;
   doc["text"] = text;
+  doc["parse_mode"] = "HTML";  // the heartbeat message uses <b> for the time
   String body;
   serializeJson(doc, body);
 
@@ -280,6 +282,16 @@ static bool tgEditMessage(long messageId, const String& text) {
 // Message content
 // ---------------------------------------------------------------------------
 
+// Wrap the leading "HH:MM" of a "HH:MM DD Mon" timestamp in <b></b> so Telegram
+// renders the time (but not the date) in bold. Requires parse_mode=HTML.
+static String boldTime(const String& ts) {
+  int sp = ts.indexOf(' ');
+  if (sp < 0) {
+    return ts;
+  }
+  return "<b>" + ts.substring(0, sp) + "</b>" + ts.substring(sp);
+}
+
 static String buildMessage(const String& lastSeen) {
   String msg;
   if (strlen(DEVICE_NAME) > 0) {
@@ -291,11 +303,11 @@ static String buildMessage(const String& lastSeen) {
     // is the real turn-on time. Hidden while muted, where the message is reused
     // indefinitely and that time would be stale.
     msg += "On since: ";
-    msg += g_onlineSince;
+    msg += boldTime(g_onlineSince);
     msg += "\n";
   }
   msg += "Last seen: ";
-  msg += lastSeen;
+  msg += boldTime(lastSeen);
   msg += " (updated every " + String(HEARTBEAT_MIN) + "m)";
   return msg;
 }
