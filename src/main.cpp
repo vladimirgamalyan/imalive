@@ -232,6 +232,7 @@ static String buildMessage(const String& lastSeen) {
   msg += g_onlineSince;
   msg += "\nLast seen: ";
   msg += lastSeen;
+  msg += " (updated every " + String(HEARTBEAT_MIN) + "m)";
   return msg;
 }
 
@@ -248,6 +249,7 @@ static String buildStatusMessage() {
   msg += "\nOnline since: " + g_onlineSince;
   msg += "\nNow: " + formatLocalTime();
   msg += "\nUptime: " + formatDurationSince(g_bootEpoch);
+  msg += "\nHeartbeat: every " + String(HEARTBEAT_MIN) + "m";
   msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
   msg += "\nIP: " + WiFi.localIP().toString();
   msg += "\nVersion: ";
