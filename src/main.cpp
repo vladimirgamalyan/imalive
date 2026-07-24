@@ -18,7 +18,7 @@
 
 // Fixed tunables (not exposed in config.h).
 static const char* NTP_SERVER = "pool.ntp.org";
-static const uint32_t WIFI_RETRY_DELAY_MS = 1000;
+static const uint32_t WIFI_BLINK_MS = 250;      // status-LED blink period while connecting
 static const uint32_t NTP_TIMEOUT_MS = 30000;
 static const uint32_t WDT_TIMEOUT_S = 60;
 static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
@@ -27,6 +27,26 @@ static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
 static long g_messageId = -1;   // Telegram message id for the current power session
 static String g_onlineSince;    // local time this power session started
 static uint32_t g_lastHeartbeatMs = 0;
+
+// ---------------------------------------------------------------------------
+// Status LED
+// Onboard blue LED on the ESP32-C3 SuperMini: GPIO8, active-low (LOW = lit).
+// Blinks while connecting to WiFi, solid on once connected.
+// ---------------------------------------------------------------------------
+
+static const int  LED_PIN = 8;
+static const bool LED_ACTIVE_LOW = true;
+
+static void ledSet(bool on) {
+  bool level = LED_ACTIVE_LOW ? !on : on;
+  digitalWrite(LED_PIN, level ? HIGH : LOW);
+}
+
+static void ledToggle() {
+  static bool state = false;
+  state = !state;
+  ledSet(state);
+}
 
 // ---------------------------------------------------------------------------
 // Time
@@ -65,24 +85,27 @@ static bool syncTime() {
 // so we keep retrying (CONCEPT.md §7).
 static void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
+    ledSet(true);  // solid on = connected
     return;
   }
   Serial.printf("Connecting to WiFi '%s'...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  int tries = 0;
+  int ticks = 0;
   while (WiFi.status() != WL_CONNECTED) {
-    delay(WIFI_RETRY_DELAY_MS);
-    Serial.print(".");
+    ledToggle();            // blink while connecting
+    delay(WIFI_BLINK_MS);
     esp_task_wdt_reset();
-    if (++tries % 20 == 0) {
-      Serial.println("\nStill no WiFi, re-issuing begin()...");
+    // Re-issue begin() roughly every 20 s in case the router is still booting.
+    if (++ticks % (20000 / WIFI_BLINK_MS) == 0) {
+      Serial.println("Still no WiFi, re-issuing begin()...");
       WiFi.disconnect();
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     }
   }
-  Serial.printf("\nWiFi connected, IP %s\n", WiFi.localIP().toString().c_str());
+  ledSet(true);  // solid on = connected
+  Serial.printf("WiFi connected, IP %s\n", WiFi.localIP().toString().c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +202,9 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println("\n[imalive] boot");
+
+  pinMode(LED_PIN, OUTPUT);
+  ledSet(false);
 
   // Reboot if the main loop hangs (always-on reliability, CONCEPT.md §7).
   esp_task_wdt_init(WDT_TIMEOUT_S, true);

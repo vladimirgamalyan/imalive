@@ -230,7 +230,8 @@ reach Telegram — so there is no case where it can report but cannot get the ti
    the ability to heartbeat is not lost.
 
 7. **Always-on reliability.** Enable the hardware watchdog (auto-reboot on hang).
-   Optionally — status indication via the onboard LED (present on the SuperMini).
+   The onboard LED (GPIO8) indicates WiFi status: blinking while connecting,
+   solid once connected.
 
 ## 8. Out of MVP scope (possible extensions)
 
@@ -253,11 +254,12 @@ Decided:
   `HEARTBEAT_MIN`); default interval — **30 minutes**. Timezone uses a DST-aware
   POSIX TZ string (see §6 "Time source").
 - Recipient — **personal chat OR channel** (see §6, both supported).
+- Onboard LED (GPIO8, active-low) is a **WiFi status indicator**: it blinks while
+  connecting and stays solid once connected.
 
 Still open (can be decided during implementation):
 
 - The time-string format in the message (`24.07 14:32` — fine or otherwise).
-- Whether to use the onboard LED (GPIO8) for status indication.
 
 Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inference),
 0003 (stateless / no NVS), 0004 (Telegram messaging model), 0005 (report liveness,
