@@ -70,6 +70,7 @@ cp include/config.example.h include/config.h
 | `WIFI_SSID` / `WIFI_PASSWORD` | Your 2.4 GHz WiFi credentials |
 | `TG_BOT_TOKEN` | Bot token from [@BotFather](https://t.me/BotFather) |
 | `TG_CHAT_ID` | **Recipient** chat id — a personal chat or a channel |
+| `TG_ADMIN_IDS` | User IDs allowed to command the bot, e.g. `{ 111, 222 }` |
 | `HEARTBEAT_MIN` | Heartbeat interval in minutes (default `30`) |
 | `DEVICE_NAME` | Optional label shown in the message, e.g. `"Cottage"` |
 | `TZ_STRING` | POSIX timezone, DST-aware (default `"ICT-7"`, Asia/Bangkok) |
@@ -103,9 +104,11 @@ arrive in your chat within a few seconds.
 
 ## Commands
 
-Direct-message the bot:
+Direct-message the bot (only the user IDs in `TG_ADMIN_IDS` are answered; anyone
+else is ignored):
 
-- `/status` — the device replies with its firmware version, uptime, WiFi signal
+- `/status` — the device replies with its configuration (name, timezone, chat,
+  WiFi SSID, admin IDs) and live state: firmware version, uptime, WiFi signal
   (RSSI), IP address, when it came online, the current time, and whether startup
   pings are muted.
 - `/mute` — silence the notification on the next power-on. Send this **before** a

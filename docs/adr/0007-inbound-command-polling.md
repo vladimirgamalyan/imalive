@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-07-24
 
+> Extended by ADR-0008 (`/mute`, `/unmute`) and ADR-0011 (commands restricted to a
+> `TG_ADMIN_IDS` allowlist).
+
 ## Context
 
 The device is otherwise a one-way reporter (CONCEPT.md §8). It is useful to query

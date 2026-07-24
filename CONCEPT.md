@@ -312,4 +312,4 @@ Related ADRs: `docs/adr/` — 0001 (Arduino/PlatformIO), 0002 (heartbeat inferen
 model), 0005 (report liveness, not power), 0006 (time source: NTP + POSIX TZ),
 0007 (inbound `/status` command), 0008 (NVS persistence, reset-reason classifier,
 mute toggle), 0009 (edit window: 48 h chats / unlimited channels), 0010 (preserve
-NVS across repartition).
+NVS across repartition), 0011 (command admin allowlist).

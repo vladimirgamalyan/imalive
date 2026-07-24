@@ -14,6 +14,10 @@
 // ("-100..." or "@channel"). For a channel, add the bot as an administrator
 // with post permission.
 #define TG_CHAT_ID     "123456789"
+// User IDs allowed to send commands (/status, /mute, /unmute). Commands from any
+// other sender are ignored. At least one id is required. Find yours via
+// @userinfobot. Braces required, e.g. { 111, 222 }.
+#define TG_ADMIN_IDS   { 123456789 }
 
 // --- Behaviour ---
 #define HEARTBEAT_MIN  30      // heartbeat interval, minutes

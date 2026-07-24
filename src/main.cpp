@@ -31,6 +31,10 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 static const char* FW_VERSION  = "0.1.0";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 
+// Telegram user IDs allowed to issue commands (config.h); others are ignored.
+static const long long g_adminIds[] = TG_ADMIN_IDS;
+static const size_t g_adminCount = sizeof(g_adminIds) / sizeof(g_adminIds[0]);
+
 // Runtime state. The tracked message_id, the session's "online since", and the
 // startup-ping mute flag survive reboots in NVS (see the Persistent state
 // section); everything else is RAM only.
@@ -302,17 +306,26 @@ static String buildMessage(const String& lastSeen) {
 
 static String buildStatusMessage() {
   String msg = "Status";
-  if (strlen(DEVICE_NAME) > 0) {
-    msg += " — ";
-    msg += DEVICE_NAME;
-  }
+  msg += "\nName: ";
+  msg += (strlen(DEVICE_NAME) > 0) ? DEVICE_NAME : "(none)";
   msg += "\nOnline since: " + g_onlineSince;
   msg += "\nNow: " + formatLocalTime();
   msg += "\nUptime: " + formatDurationSince(g_bootEpoch);
   msg += "\nHeartbeat: every " + String(HEARTBEAT_MIN) + "m";
   msg += "\nMute: " + String(g_muted ? "on" : "off");
-  msg += "\nWiFi: " + String(WiFi.RSSI()) + " dBm";
+  msg += "\nWiFi: " + String(WIFI_SSID) + " (" + String(WiFi.RSSI()) + " dBm)";
   msg += "\nIP: " + WiFi.localIP().toString();
+  msg += "\nChat: " + String(TG_CHAT_ID);
+  msg += "\nTZ: " + String(TZ_STRING);
+  msg += "\nAdmins: ";
+  for (size_t i = 0; i < g_adminCount; i++) {
+    char idbuf[24];
+    snprintf(idbuf, sizeof(idbuf), "%lld", g_adminIds[i]);
+    if (i) {
+      msg += ", ";
+    }
+    msg += idbuf;
+  }
   msg += "\nVersion: ";
   msg += FW_VERSION;
   msg += " (";
@@ -343,6 +356,16 @@ static void drainPendingUpdates() {
   }
 }
 
+// True if the given Telegram user id may issue commands (config TG_ADMIN_IDS).
+static bool isAdmin(long long id) {
+  for (size_t i = 0; i < g_adminCount; i++) {
+    if (g_adminIds[i] == id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Short-poll getUpdates and reply to /status.
 static void pollCommands() {
   JsonDocument req;
@@ -366,6 +389,12 @@ static void pollCommands() {
 
   for (JsonObject upd : res["result"].as<JsonArray>()) {
     g_updateOffset = upd["update_id"].as<long>() + 1;  // acknowledge
+
+    long long fromId = upd["message"]["from"]["id"].as<long long>();
+    if (!isAdmin(fromId)) {
+      Serial.printf("Ignoring command from non-admin %lld\n", fromId);
+      continue;
+    }
 
     const char* text = upd["message"]["text"] | "";
     long long chatId = upd["message"]["chat"]["id"].as<long long>();
