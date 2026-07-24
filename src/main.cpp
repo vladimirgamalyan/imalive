@@ -277,19 +277,20 @@ static bool tgEditMessage(long messageId, const String& text) {
 // ---------------------------------------------------------------------------
 
 static String buildMessage(const String& lastSeen) {
-  String msg = "I'm alive";
+  String msg;
   if (strlen(DEVICE_NAME) > 0) {
-    msg += " — ";  // em dash
     msg += DEVICE_NAME;
+    msg += "\n";
   }
   if (!g_muted) {
     // Only when armed: a new message means a genuine power-on, so g_onlineSince
     // is the real turn-on time. Hidden while muted, where the message is reused
     // indefinitely and that time would be stale.
-    msg += "\nOn since: ";
+    msg += "On since: ";
     msg += g_onlineSince;
+    msg += "\n";
   }
-  msg += "\nLast seen: ";
+  msg += "Last seen: ";
   msg += lastSeen;
   msg += " (updated every " + String(HEARTBEAT_MIN) + "m)";
   return msg;

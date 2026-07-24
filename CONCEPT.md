@@ -27,11 +27,11 @@ anything about power directly would be misleading. The project name — *imalive
 
 ## 2. What the observer sees
 
-- **Device comes online** → it reports **"I'm alive"** with a `Last seen` line. A
-  genuine mains power-on posts a **new** message and is the only sound-notification
-  — and only when notifications are *armed* (the device ships **muted**, ADR-0008).
-  A spontaneous reboot (watchdog / OTA) or a muted restart **resumes the existing
-  message** silently.
+- **Device comes online** → it posts a `Last seen` line (prefixed by `DEVICE_NAME`
+  if set). A genuine mains power-on posts a **new** message and is the only
+  sound-notification — and only when notifications are *armed* (the device ships
+  **muted**, ADR-0008). A spontaneous reboot (watchdog / OTA) or a muted restart
+  **resumes the existing message** silently.
 - **While the device is alive** → every N minutes it **edits that same message**
   (via `editMessageText`), updating the "last seen" line. Editing a Telegram
   message does **not** raise a new notification — so the chat is not spammed.
@@ -45,11 +45,12 @@ whether power is present.
 
 ### Message example
 
-Right after coming online (the `On since` line appears only when notifications are
-armed — i.e. un-muted; a muted device shows just `Last seen`):
+Right after coming online (`DEVICE_NAME` is the first line, omitted if unset; the
+`On since` line appears only when armed / un-muted; a muted device shows just
+`Last seen`):
 
 ```
-I'm alive
+Cottage
 On since: 24.07 14:32
 Last seen: 24.07 14:32 (updated every 30m)
 ```
@@ -57,7 +58,7 @@ Last seen: 24.07 14:32 (updated every 30m)
 After a few heartbeats (same message, edited in place):
 
 ```
-I'm alive
+Cottage
 On since: 24.07 14:32
 Last seen: 24.07 16:02 (updated every 30m)
 ```
@@ -226,7 +227,7 @@ Practical notes:
 
 - Give each device a distinct `DEVICE_NAME`. The firmware never relies on it — it
   is purely for the human reader — but it turns a channel into a readable board:
-  `I'm alive — Cottage`, `I'm alive — Office`, ...
+  `Cottage`, `Office`, ...
 - A device resumes its own message across reboots (`message_id` in NVS, ADR-0008)
   and posts a new one only on a real, un-muted power cycle; earlier messages freeze
   in place. In a channel this accumulates one frozen message per power cycle per
