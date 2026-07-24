@@ -27,10 +27,10 @@ anything about power directly would be misleading. The project name — *imalive
 
 ## 2. What the observer sees
 
-- **Device comes online** → it reports "I'm alive (online since 14:32)". A genuine
-  mains power-on posts a **new** message and is the only sound-notification — and
-  only when notifications are *armed* (the device ships **muted**, ADR-0008). A
-  spontaneous reboot (watchdog / OTA) or a muted restart **resumes the existing
+- **Device comes online** → it reports **"I'm alive"** with a `Last seen` line. A
+  genuine mains power-on posts a **new** message and is the only sound-notification
+  — and only when notifications are *armed* (the device ships **muted**, ADR-0008).
+  A spontaneous reboot (watchdog / OTA) or a muted restart **resumes the existing
   message** silently.
 - **While the device is alive** → every N minutes it **edits that same message**
   (via `editMessageText`), updating the "last seen" line. Editing a Telegram
@@ -45,20 +45,21 @@ whether power is present.
 
 ### Message example
 
-Right after coming online:
+Right after coming online (the `On since` line appears only when notifications are
+armed — i.e. un-muted; a muted device shows just `Last seen`):
 
 ```
 I'm alive
-Online since: 24.07 14:32
-Last seen:      24.07 14:32
+On since: 24.07 14:32
+Last seen: 24.07 14:32 (updated every 30m)
 ```
 
 After a few heartbeats (same message, edited in place):
 
 ```
 I'm alive
-Online since: 24.07 14:32
-Last seen:      24.07 16:02
+On since: 24.07 14:32
+Last seen: 24.07 16:02 (updated every 30m)
 ```
 
 If the device goes silent after 16:02, the message stays at "Last seen: 16:02" —

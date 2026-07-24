@@ -276,8 +276,13 @@ static String buildMessage(const String& lastSeen) {
     msg += " — ";  // em dash
     msg += DEVICE_NAME;
   }
-  msg += "\nOnline since: ";
-  msg += g_onlineSince;
+  if (!g_muted) {
+    // Only when armed: a new message means a genuine power-on, so g_onlineSince
+    // is the real turn-on time. Hidden while muted, where the message is reused
+    // indefinitely and that time would be stale.
+    msg += "\nOn since: ";
+    msg += g_onlineSince;
+  }
   msg += "\nLast seen: ";
   msg += lastSeen;
   msg += " (updated every " + String(HEARTBEAT_MIN) + "m)";

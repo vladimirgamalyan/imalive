@@ -14,7 +14,7 @@ alive**, and you infer the rest.
 ## How it works
 
 1. On a genuine power-on it connects to WiFi, syncs the clock over NTP, and sends
-   a Telegram message: `I'm alive — <name>` with the time it came online. It ships
+   a Telegram message `I'm alive — <name>` with a `Last seen` timestamp. It ships
    **muted** (silent); send `/unmute` once so that real power-ons notify.
 2. While powered, every `HEARTBEAT_MIN` minutes it **edits that same message** to
    refresh a `Last seen` line. Editing raises **no** notification, so the chat is
@@ -32,9 +32,12 @@ resumes the **same** message silently — no false "power is back" ping. Once
 
 ```
 I'm alive — The Fine Place Resort
-Online since: 24.07 14:32
+On since: 24.07 14:32
 Last seen: 24.07 16:02 (updated every 30m)
 ```
+
+The `On since` line appears only while notifications are armed (`/unmute`); a muted
+device shows just `Last seen`.
 
 ## Hardware
 
