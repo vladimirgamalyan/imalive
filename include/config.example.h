@@ -20,8 +20,13 @@
 #define TG_ADMIN_IDS   { 123456789 }
 
 // --- Behaviour ---
-#define HEARTBEAT_MIN  30      // heartbeat interval, minutes
 #define DEVICE_NAME    ""      // optional label shown in the message, e.g. "Cottage"
+#define HEARTBEAT_MIN  5      // heartbeat interval, minutes
+// Phase-lock heartbeat edits to round wall-clock times (e.g. :00, :05, :10 for a
+// 5-minute interval) so "Last seen" values land on a tidy grid. Applies only when
+// HEARTBEAT_MIN divides 60 evenly (5/10/15/20/30/60); ignored otherwise. Set to 0
+// to keep edits at a fixed offset from power-on instead.
+#define HEARTBEAT_ALIGN 1      // 1 = align to round minutes, 0 = off
 
 // --- Timezone (POSIX TZ string, DST-aware; see CONCEPT.md "Time source") ---
 // Asia/Bangkok, UTC+7, no DST.

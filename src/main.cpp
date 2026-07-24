@@ -20,6 +20,11 @@
 
 #include "config.h"
 
+// Default the alignment flag on if a pre-existing config.h predates it.
+#ifndef HEARTBEAT_ALIGN
+#define HEARTBEAT_ALIGN 1
+#endif
+
 // Fixed tunables (not exposed in config.h).
 static const char* NTP_SERVER = "pool.ntp.org";
 static const uint32_t WIFI_BLINK_MS = 250;      // status-LED blink period while connecting
@@ -27,6 +32,15 @@ static const uint32_t NTP_TIMEOUT_MS = 30000;
 static const uint32_t WDT_TIMEOUT_S = 60;
 static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
 static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
+
+// Heartbeat edits are phase-locked to wall-clock multiples of HEARTBEAT_MIN when
+// HEARTBEAT_ALIGN is on and the interval divides an hour evenly (so 5/10/15/30/60
+// tile the hour cleanly: "Last seen" lands on :00, :05, :10, ...). A boundary
+// falling within HEARTBEAT_GUARD_S of the previous update is skipped to the next
+// one, so a power-on never fires two edits seconds apart. 30 s is a wide margin
+// under Telegram's ~1 request/second-per-chat limit.
+static const bool HEARTBEAT_ALIGNED = (HEARTBEAT_ALIGN != 0) && (60 % HEARTBEAT_MIN == 0);
+static const int  HEARTBEAT_GUARD_S = 30;
 
 static const char* FW_VERSION  = "0.1.0";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
@@ -44,6 +58,7 @@ static time_t g_onlineSinceEpoch = 0;  // session start epoch, persistent across
 static time_t g_bootEpoch = 0;  // epoch of this boot, for uptime-since-boot
 static bool g_muted = true;     // if set, a power-on resumes silently — no ping (NVS); muted by default
 static uint32_t g_lastHeartbeatMs = 0;
+static time_t g_nextHeartbeatEpoch = 0;  // next aligned heartbeat, wall-clock (RAM; aligned mode only)
 static long g_updateOffset = 0; // getUpdates acknowledge cursor (RAM only)
 static uint32_t g_lastPollMs = 0;
 
@@ -108,6 +123,26 @@ static String formatDurationSince(time_t start) {
   time_t now = time(nullptr);
   uint32_t seconds = (now > start) ? (uint32_t)(now - start) : 0;
   return formatDuration(seconds);
+}
+
+// Epoch of the next wall-clock-aligned heartbeat: the next local minute that is a
+// multiple of HEARTBEAT_MIN with seconds zeroed, pushed forward until it is at
+// least HEARTBEAT_GUARD_S after `notBefore` (the previous update). Returns 0 if
+// the clock is not set. Only meaningful when HEARTBEAT_ALIGNED.
+static time_t nextAlignedHeartbeat(time_t notBefore) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return 0;
+  }
+  timeinfo.tm_sec = 0;
+  // Snap up to the next multiple-of-interval minute; mktime normalizes a value
+  // >= 60 into the following hour.
+  timeinfo.tm_min = (timeinfo.tm_min / HEARTBEAT_MIN + 1) * HEARTBEAT_MIN;
+  time_t next = mktime(&timeinfo);
+  while ((long)(next - notBefore) < HEARTBEAT_GUARD_S) {
+    next += (time_t)HEARTBEAT_MIN * 60;
+  }
+  return next;
 }
 
 // Start SNTP and block until the clock is set or NTP_TIMEOUT_MS elapses.
@@ -511,6 +546,9 @@ void setup() {
   drainPendingUpdates();  // ignore commands received before this boot
 
   g_lastHeartbeatMs = millis();
+  if (HEARTBEAT_ALIGNED) {
+    g_nextHeartbeatEpoch = nextAlignedHeartbeat(time(nullptr));
+  }
   g_lastPollMs = millis();
 }
 
@@ -527,7 +565,10 @@ void loop() {
     pollCommands();
   }
 
-  if (millis() - g_lastHeartbeatMs >= HEARTBEAT_MS) {
+  bool heartbeatDue = HEARTBEAT_ALIGNED
+      ? (g_nextHeartbeatEpoch > 0 && time(nullptr) >= g_nextHeartbeatEpoch)
+      : (millis() - g_lastHeartbeatMs >= HEARTBEAT_MS);
+  if (heartbeatDue) {
     g_lastHeartbeatMs = millis();
 
     String lastSeen = formatLocalTime();
@@ -543,6 +584,9 @@ void loop() {
         g_messageId = newId;
         saveSession();
       }
+    }
+    if (HEARTBEAT_ALIGNED) {
+      g_nextHeartbeatEpoch = nextAlignedHeartbeat(time(nullptr));
     }
     Serial.printf("Heartbeat: last seen %s (message id %ld)\n", lastSeen.c_str(), g_messageId);
   }
