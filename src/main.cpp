@@ -263,7 +263,13 @@ static bool tgEditMessage(long messageId, const String& text) {
   serializeJson(doc, body);
 
   String response;
-  return tgApiPost("editMessageText", body, response);
+  if (tgApiPost("editMessageText", body, response)) {
+    return true;
+  }
+  // Telegram rejects an edit whose text equals the current message content with
+  // "message is not modified". That means the message already shows what we want,
+  // so treat it as success rather than posting a fresh message.
+  return response.indexOf("message is not modified") >= 0;
 }
 
 // ---------------------------------------------------------------------------
