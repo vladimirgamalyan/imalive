@@ -61,6 +61,8 @@ device shows just `Last seen`.
 - Onboard blue LED (GPIO8) is used as a WiFi status indicator:
   - **blinking** — connecting to WiFi;
   - **solid** — connected.
+- A 3D-printable enclosure lives in [`case/`](case/) — print `top.stl` and
+  `bottom.stl`.
 
 <img src="docs/images/board.jpg" width="440" alt="ESP32-C3 SuperMini">
 
@@ -172,6 +174,7 @@ tradeoffs; see [`CONCEPT.md` §7](CONCEPT.md) and the [ADRs](docs/adr/).
 platformio.ini            PlatformIO project (ESP32-C3 SuperMini, Arduino)
 include/config.example.h  config template (copy to config.h)
 src/main.cpp              firmware
+case/                     3D-printable enclosure (STL)
 CONCEPT.md                design concept and tradeoffs
 docs/adr/                 architecture decision records
 ```
