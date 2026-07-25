@@ -11,6 +11,8 @@ so *the device being online is the signal*. It never claims "power is back" (it
 cannot tell power from internet or a hang) — it only ever reports that **it is
 alive**, and you infer the rest.
 
+![Assembled device](docs/images/device.jpg)
+
 ## Highlights
 
 - **No sensors, no cloud, no server** — a $2 board and a Telegram bot. The
@@ -59,6 +61,8 @@ device shows just `Last seen`.
 - Onboard blue LED (GPIO8) is used as a WiFi status indicator:
   - **blinking** — connecting to WiFi;
   - **solid** — connected.
+
+<img src="docs/images/board.jpg" width="440" alt="ESP32-C3 SuperMini">
 
 ## Getting started
 
