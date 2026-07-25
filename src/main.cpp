@@ -7,16 +7,22 @@
 // or a planned muted restart silently resumes the same message instead of
 // pinging again. When power is lost the device dies and the message freezes at
 // its last "Last seen" value. See CONCEPT.md and docs/adr/ for the rationale.
+//
+// Firmware updates over the air: an admin sends the new .bin as a Telegram
+// document captioned /update; a boot-count watchdog rolls back to the previous
+// image if the new one fails to confirm (ADR-0013).
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <Update.h>
 #include <ArduinoJson.h>
 #include <time.h>
 #include <Preferences.h>
 #include "esp_task_wdt.h"
 #include "esp_system.h"
+#include "esp_ota_ops.h"
 
 #include "config.h"
 
@@ -42,7 +48,7 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 static const bool HEARTBEAT_ALIGNED = (HEARTBEAT_ALIGN != 0) && (60 % HEARTBEAT_MIN == 0);
 static const int  HEARTBEAT_GUARD_S = 30;
 
-static const char* FW_VERSION  = "0.1.0";
+static const char* FW_VERSION  = "0.2.0";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 
 // Telegram user IDs allowed to issue commands (config.h); others are ignored.
@@ -61,6 +67,12 @@ static uint32_t g_lastHeartbeatMs = 0;
 static time_t g_nextHeartbeatEpoch = 0;  // next aligned heartbeat, wall-clock (RAM; aligned mode only)
 static long g_updateOffset = 0; // getUpdates acknowledge cursor (RAM only)
 static uint32_t g_lastPollMs = 0;
+
+// OTA confirmation state (ADR-0013). A flashed update must confirm itself
+// within OTA_MAX_BOOTS boots or the previous image is restored.
+enum : uint8_t { OTA_IDLE = 0, OTA_PENDING = 1, OTA_ROLLED_BACK = 2 };
+static uint8_t g_otaState = OTA_IDLE;   // NVS
+static long long g_otaChat = 0;         // chat that initiated the update (NVS)
 
 // ---------------------------------------------------------------------------
 // Status LED
@@ -207,6 +219,8 @@ static void stateBegin() {
   g_messageId = g_prefs.getLong("msg_id", -1);
   g_onlineSinceEpoch = (time_t)g_prefs.getLong64("since", 0);
   g_muted = g_prefs.getBool("muted", true);  // muted by default: silent until /unmute
+  g_otaState = g_prefs.getUChar("ota_state", OTA_IDLE);
+  g_otaChat = (long long)g_prefs.getLong64("ota_chat", 0);
 }
 
 // Persist the tracked message and its session start (after creating a message).
@@ -217,6 +231,11 @@ static void saveSession() {
 
 static void saveMuted() {
   g_prefs.putBool("muted", g_muted);
+}
+
+static void saveOtaState() {
+  g_prefs.putUChar("ota_state", g_otaState);
+  g_prefs.putLong64("ota_chat", (int64_t)g_otaChat);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,10 +304,13 @@ static long tgSendMessage(const String& text, bool silent) {
 }
 
 // Reply to a specific chat (used by command handling). Chat ids are 64-bit.
-static void tgReply(long long chatId, const String& text) {
+static void tgReply(long long chatId, const String& text, bool silent = false) {
   JsonDocument doc;
   doc["chat_id"] = chatId;
   doc["text"] = text;
+  if (silent) {
+    doc["disable_notification"] = true;
+  }
   tgSendPrepared(doc);
 }
 
@@ -325,10 +347,176 @@ static void tgSetCommands() {
   JsonObject u = cmds.add<JsonObject>();
   u["command"] = "unmute";
   u["description"] = "Re-arm startup notification";
+  JsonObject o = cmds.add<JsonObject>();
+  o["command"] = "update";
+  o["description"] = "OTA update (attach .bin with caption /update)";
   String body;
   serializeJson(doc, body);
   String response;
   tgApiPost("setMyCommands", body, response);
+}
+
+// ---------------------------------------------------------------------------
+// OTA update (ADR-0013)
+// An admin sends the firmware .bin as a document captioned /update; it is
+// fetched via getFile and streamed into the free OTA slot. The new firmware
+// must confirm itself (first successful update of the tracked message) within
+// OTA_MAX_BOOTS boots, or otaCheckOnBoot() restores the previous image.
+// ---------------------------------------------------------------------------
+
+static const uint8_t OTA_MAX_BOOTS = 3;
+
+// Resolve a Telegram file_id to its download path on api.telegram.org.
+static String tgGetFilePath(const char* fileId) {
+  JsonDocument doc;
+  doc["file_id"] = fileId;
+  String body;
+  serializeJson(doc, body);
+
+  String response;
+  if (!tgApiPost("getFile", body, response)) {
+    return String();
+  }
+  JsonDocument res;
+  if (deserializeJson(res, response) || !res["ok"].as<bool>()) {
+    return String();
+  }
+  return res["result"]["file_path"].as<String>();
+}
+
+// Download the firmware image and stream it into the free OTA slot. Returns an
+// empty string on success, or a short error description.
+static String otaDownloadAndFlash(const String& filePath) {
+  WiFiClientSecure client;
+  client.setInsecure();  // same tradeoff as tgApiPost
+
+  HTTPClient https;
+  https.setTimeout(15000);
+  String url = String("https://api.telegram.org/file/bot") + TG_BOT_TOKEN + "/" + filePath;
+  if (!https.begin(client, url)) {
+    return String("HTTPS begin() failed");
+  }
+  int code = https.GET();
+  if (code != HTTP_CODE_OK) {
+    https.end();
+    return "download HTTP " + String(code);
+  }
+  int total = https.getSize();
+  if (total <= 0) {
+    https.end();
+    return String("missing Content-Length");
+  }
+  if (!Update.begin(total)) {
+    https.end();
+    return "Update.begin: " + String(Update.errorString());
+  }
+
+  WiFiClient* stream = https.getStreamPtr();
+  uint8_t buf[4096];
+  int written = 0;
+  uint32_t lastData = millis();
+  while (written < total) {
+    esp_task_wdt_reset();  // the download may outlast the watchdog period
+    size_t avail = stream->available();
+    if (avail == 0) {
+      if (!client.connected() || millis() - lastData > 20000) {
+        break;  // connection lost or stalled
+      }
+      delay(10);
+      continue;
+    }
+    size_t n = stream->readBytes(buf, avail < sizeof(buf) ? avail : sizeof(buf));
+    if (n == 0 || Update.write(buf, n) != n) {
+      break;
+    }
+    written += n;
+    lastData = millis();
+  }
+  https.end();
+
+  if (written < total || !Update.end()) {
+    String err = "flash failed at " + String(written) + "/" + String(total)
+               + " (" + Update.errorString() + ")";
+    Update.abort();
+    return err;
+  }
+  return String();
+}
+
+// Handle an /update-captioned document from an admin: flash it into the free
+// slot and reboot into the new image. On success this function does not return.
+static void handleOtaDocument(long long chatId, const char* fileId, long fileSize) {
+  Serial.printf("OTA: update request from %lld, %ld bytes\n", chatId, fileSize);
+  tgReply(chatId, "Updating: downloading " + String(fileSize / 1024) + " KB...");
+
+  String filePath = tgGetFilePath(fileId);
+  if (filePath.length() == 0) {
+    tgReply(chatId, "Update failed: getFile error.");
+    return;
+  }
+  String err = otaDownloadAndFlash(filePath);
+  if (err.length() > 0) {
+    tgReply(chatId, "Update failed: " + err);
+    Serial.printf("OTA: %s\n", err.c_str());
+    return;
+  }
+
+  // Arm the confirmation watchdog: the new firmware must report in within
+  // OTA_MAX_BOOTS boots or otaCheckOnBoot() restores this image.
+  g_otaState = OTA_PENDING;
+  g_otaChat = chatId;
+  g_prefs.putUChar("ota_boots", 0);
+  saveOtaState();
+
+  tgReply(chatId, "Flashed OK, rebooting; will confirm shortly.");
+  Serial.println("OTA: flashed, restarting");
+  delay(500);
+  ESP.restart();
+}
+
+// Count boots while an update awaits confirmation; after OTA_MAX_BOOTS failed
+// attempts restore the previous image. Runs before networking so even a
+// firmware that cannot get online is undone.
+static void otaCheckOnBoot() {
+  if (g_otaState != OTA_PENDING) {
+    return;
+  }
+  uint8_t boots = g_prefs.getUChar("ota_boots", 0) + 1;
+  g_prefs.putUChar("ota_boots", boots);
+  Serial.printf("OTA: awaiting confirmation, boot %u/%u\n", boots, OTA_MAX_BOOTS);
+  if (boots <= OTA_MAX_BOOTS) {
+    return;
+  }
+  if (Update.canRollBack()) {
+    Serial.println("OTA: confirmation failed, rolling back");
+    g_otaState = OTA_ROLLED_BACK;
+    saveOtaState();
+    Update.rollBack();
+    ESP.restart();
+  } else {
+    // No valid image to return to; stop counting and keep running.
+    Serial.println("OTA: rollback not possible; keeping this image");
+    g_otaState = OTA_IDLE;
+    saveOtaState();
+  }
+}
+
+// Once the tracked message has been updated successfully (Telegram reachable),
+// resolve a pending update: confirm the new image, or report a rollback.
+static void otaReportOnline() {
+  if (g_otaState == OTA_IDLE) {
+    return;
+  }
+  if (g_otaState == OTA_PENDING) {
+    tgReply(g_otaChat, String("Update confirmed: running ") + FW_VERSION + " (" + BUILD_STAMP + ")");
+    Serial.println("OTA: confirmed");
+  } else {  // OTA_ROLLED_BACK
+    tgReply(g_otaChat, String("Update FAILED and was rolled back; running ") + FW_VERSION + " (" + BUILD_STAMP + ")");
+    Serial.println("OTA: rollback reported");
+  }
+  g_otaState = OTA_IDLE;
+  g_prefs.putUChar("ota_boots", 0);
+  saveOtaState();
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +574,8 @@ static String buildStatusMessage() {
   msg += " (";
   msg += BUILD_STAMP;
   msg += ")";
+  msg += "\nSlot: ";
+  msg += esp_ota_get_running_partition()->label;
   return msg;
 }
 
@@ -451,8 +641,18 @@ static void pollCommands() {
       continue;
     }
 
-    const char* text = upd["message"]["text"] | "";
     long long chatId = upd["message"]["chat"]["id"].as<long long>();
+
+    // A document captioned /update carries a firmware image (ADR-0013).
+    const char* otaFileId = upd["message"]["document"]["file_id"];
+    const char* caption = upd["message"]["caption"] | "";
+    if (otaFileId != nullptr && strncmp(caption, "/update", 7) == 0) {
+      handleOtaDocument(chatId, otaFileId,
+                        upd["message"]["document"]["file_size"].as<long>());
+      continue;
+    }
+
+    const char* text = upd["message"]["text"] | "";
     if (strncmp(text, "/status", 7) == 0) {
       tgReply(chatId, buildStatusMessage());
       Serial.printf("Replied to /status from chat %lld\n", chatId);
@@ -466,7 +666,51 @@ static void pollCommands() {
       saveMuted();
       tgReply(chatId, "Startup ping armed. The next real power-on will notify.");
       Serial.println("Armed startup ping");
+    } else if (strncmp(text, "/update", 7) == 0) {
+      tgReply(chatId, "Attach the firmware .bin as a document with caption /update.");
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Admin boot notice
+// Every boot sends a short silent note to each admin's private chat (never the
+// main chat): reset reason and firmware version. This makes soft reboots
+// (watchdog / panic / OTA) visible without disturbing the main chat, which
+// deliberately hides them (ADR-0008).
+// ---------------------------------------------------------------------------
+
+static const char* resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_SW:       return "software";
+    case ESP_RST_PANIC:    return "panic";
+    case ESP_RST_INT_WDT:  return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT:      return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_EXT:      return "external reset";
+    default:               return "unknown";
+  }
+}
+
+static void notifyAdminsBoot(esp_reset_reason_t reason) {
+  String msg;
+  if (strlen(DEVICE_NAME) > 0) {
+    msg += DEVICE_NAME;
+    msg += ": ";
+  }
+  msg += "booted (";
+  msg += resetReasonName(reason);
+  msg += ")\nVersion: ";
+  msg += FW_VERSION;
+  msg += " (";
+  msg += BUILD_STAMP;
+  msg += ")";
+  // An admin who has never messaged the bot cannot be reached (Telegram forbids
+  // bot-initiated chats); the send fails and is just logged by tgApiPost.
+  for (size_t i = 0; i < g_adminCount; i++) {
+    tgReply(g_adminIds[i], msg, true);  // silent: informational, no buzz
   }
 }
 
@@ -486,7 +730,8 @@ void setup() {
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   esp_task_wdt_add(NULL);
 
-  stateBegin();  // load persisted message_id / online-since / mute flag
+  stateBegin();     // load persisted message_id / online-since / mute / OTA state
+  otaCheckOnBoot(); // roll back a pending update that keeps failing to boot
 
   connectWiFi();
 
@@ -517,6 +762,7 @@ void setup() {
 
   // Continuation first: try to resume (edit) the existing message silently.
   bool resumed = !announce && g_messageId > 0 && tgEditMessage(g_messageId, text);
+  bool messageOk = resumed;
 
   if (!resumed) {
     // A new message is needed. It carries a notification only on an armed
@@ -534,6 +780,7 @@ void setup() {
     if (id > 0) {
       g_messageId = id;
       saveSession();
+      messageOk = true;
       Serial.printf("Sent %s message, id %ld\n", silent ? "silent" : "notifying", id);
     } else {
       Serial.println("Initial send failed; heartbeat will retry.");
@@ -541,6 +788,12 @@ void setup() {
   } else {
     Serial.printf("Resumed message id %ld\n", g_messageId);
   }
+
+  if (messageOk) {
+    otaReportOnline();  // resolve a pending update now that Telegram works
+  }
+
+  notifyAdminsBoot(reason);  // startup notice to admins, never the main chat
 
   tgSetCommands();        // publish the command menu (/status, /mute, /unmute)
   drainPendingUpdates();  // ignore commands received before this boot
@@ -583,7 +836,11 @@ void loop() {
       if (newId > 0) {
         g_messageId = newId;
         saveSession();
+        ok = true;
       }
+    }
+    if (ok) {
+      otaReportOnline();  // resolve a pending update now that Telegram works
     }
     if (HEARTBEAT_ALIGNED) {
       g_nextHeartbeatEpoch = nextAlignedHeartbeat(time(nullptr));

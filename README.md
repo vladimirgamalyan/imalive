@@ -102,6 +102,9 @@ pio device monitor      # optional serial console (115200 baud)
 Watch the blue LED: once it stays solid, WiFi is up and the first message should
 arrive in your chat within a few seconds.
 
+USB flashing is only needed once — after that the device updates over the air
+(see [`/update`](#commands)).
+
 ## Commands
 
 Direct-message the bot (only the user IDs in `TG_ADMIN_IDS` are answered; anyone
@@ -117,6 +120,17 @@ you can pick them from the `/` menu instead of typing:
   down. The device resumes its message silently on the next start.
 - `/unmute` — arm startup notifications (the device ships muted), so the next real
   power-on pings again.
+- `/update` — over-the-air firmware update: build with `pio run`, then send
+  `.pio/build/esp32-c3-supermini/firmware.bin` to the bot as a **document with
+  caption `/update`**. The device flashes it into the spare OTA slot, reboots,
+  silently resumes its message, and replies with the new version. If the new
+  firmware fails to start three times in a row, the device rolls back to the
+  previous image and reports the failure. Sending `/update` as plain text just
+  replies with these instructions.
+
+On every boot the device also sends a short **silent** notice (reset reason +
+firmware version) to each admin's private chat — so soft reboots (watchdog,
+panic, OTA), which the main chat deliberately hides, are still visible to you.
 
 ## Timezone
 
