@@ -1,6 +1,6 @@
 # 0014. CI release builds from version tags
 
-- Status: Accepted
+- Status: Superseded by ADR-0015
 - Date: 2026-07-25
 
 ## Context
