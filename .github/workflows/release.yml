@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Provide config from template
+        run: cp include/config.example.h include/config.h
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp .pio/build/esp32-c3-supermini/firmware.bin "imalive-$GITHUB_REF_NAME.bin"
+          gh release create "$GITHUB_REF_NAME" "imalive-$GITHUB_REF_NAME.bin" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes 'Reference build from `include/config.example.h` (placeholder credentials). Do **not** OTA it onto a configured device — it would boot but never reach WiFi. Build locally with your own `config.h` instead.'
