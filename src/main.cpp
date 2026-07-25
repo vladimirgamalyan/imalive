@@ -48,7 +48,7 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 static const bool HEARTBEAT_ALIGNED = (HEARTBEAT_ALIGN != 0) && (60 % HEARTBEAT_MIN == 0);
 static const int  HEARTBEAT_GUARD_S = 30;
 
-static const char* FW_VERSION  = "0.2.0";
+static const char* FW_VERSION  = "0.2.1";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 
 // Telegram user IDs allowed to issue commands (config.h); others are ignored.
