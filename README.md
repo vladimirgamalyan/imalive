@@ -19,15 +19,9 @@ alive**, and you infer the rest.
   message** instead of posting new ones. Edits are silent; when power drops, the
   message freezes at the last `Last seen`, which is exactly the answer you need.
 - **OTA updates over Telegram** — send a `firmware.bin` to the bot with caption
-  `/update` and the device reflashes itself from anywhere in the world. If the
-  new firmware fails to boot three times, it **rolls back automatically**.
-- **No false alarms** — the message id survives reboots in flash, so watchdog
-  resets and OTA restarts silently resume the same message. Only a real
-  power-on notifies (and only after `/unmute`).
+  `/update` and the device reflashes itself from anywhere in the world.
 - **Round-clock heartbeats** — updates are phase-locked to wall-clock times
   (14:00, 14:30, …), so the timestamps are predictable at a glance.
-- **Admin-only bot** — commands answer only allowlisted user IDs; every boot
-  also sends admins a silent notice with the reset reason and firmware version.
 
 ## How it works
 
