@@ -412,7 +412,10 @@ static String otaDownloadAndFlash(const String& filePath) {
   }
 
   WiFiClient* stream = https.getStreamPtr();
-  uint8_t buf[4096];
+  // Static, not stack: this function is inlined into the command poller, and a
+  // 4 KB stack buffer overflows the 8 KB loopTask stack on every poll once the
+  // TLS machinery is entered. Single-task use (loopTask only), so this is safe.
+  static uint8_t buf[4096];
   int written = 0;
   uint32_t lastData = millis();
   while (written < total) {
