@@ -38,6 +38,10 @@ static const uint32_t NTP_TIMEOUT_MS = 30000;
 static const uint32_t WDT_TIMEOUT_S = 60;
 static const uint32_t HEARTBEAT_MS = (uint32_t)HEARTBEAT_MIN * 60UL * 1000UL;
 static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
+// Cap on the TLS handshake. The Arduino core defaults to 120 s, twice the
+// watchdog period, so a stalled handshake (link up but no packets getting
+// through) reboots the device instead of failing the request.
+static const uint32_t TLS_HANDSHAKE_S = 10;
 
 // Heartbeat edits are phase-locked to wall-clock multiples of HEARTBEAT_MIN when
 // HEARTBEAT_ALIGN is on and the interval divides an hour evenly (so 5/10/15/30/60
@@ -48,7 +52,7 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 static const bool HEARTBEAT_ALIGNED = (HEARTBEAT_ALIGN != 0) && (60 % HEARTBEAT_MIN == 0);
 static const int  HEARTBEAT_GUARD_S = 30;
 
-static const char* FW_VERSION  = "0.2.2";
+static const char* FW_VERSION  = "0.2.3";
 static const char* BUILD_STAMP = __DATE__ " " __TIME__;  // set at compile time
 
 // Telegram user IDs allowed to issue commands (config.h); others are ignored.
@@ -73,6 +77,13 @@ static uint32_t g_lastPollMs = 0;
 enum : uint8_t { OTA_IDLE = 0, OTA_PENDING = 1, OTA_ROLLED_BACK = 2 };
 static uint8_t g_otaState = OTA_IDLE;   // NVS
 static long long g_otaChat = 0;         // chat that initiated the update (NVS)
+
+// Boot diagnostics (NVS). Each boot stores its own epoch, so the next one can
+// report how long this session lasted, and a watchdog reset bumps a lifetime
+// counter. Both are reported in the admin boot notice: a single unlucky network
+// stall looks the same as a systematic hang without them.
+static time_t g_prevBootEpoch = 0;   // epoch of the previous boot (NVS)
+static uint32_t g_wdtReboots = 0;    // lifetime count of watchdog reboots (NVS)
 
 // ---------------------------------------------------------------------------
 // Status LED
@@ -207,8 +218,8 @@ static void connectWiFi() {
 // Persistent state (NVS)
 // A power loss wipes RAM, so the tracked message_id, the session's "online
 // since", and the mute flag live in NVS. Writes happen only when a new message
-// is created or the mute flag is toggled — rare, so flash wear is negligible.
-// This narrows ADR-0003 (see ADR-0008).
+// is created, the mute flag is toggled, or a boot records its diagnostics — all
+// rare, so flash wear is negligible. This narrows ADR-0003 (see ADR-0008).
 // ---------------------------------------------------------------------------
 
 static Preferences g_prefs;
@@ -221,6 +232,8 @@ static void stateBegin() {
   g_muted = g_prefs.getBool("muted", true);  // muted by default: silent until /unmute
   g_otaState = g_prefs.getUChar("ota_state", OTA_IDLE);
   g_otaChat = (long long)g_prefs.getLong64("ota_chat", 0);
+  g_prevBootEpoch = (time_t)g_prefs.getLong64("boot_ep", 0);
+  g_wdtReboots = g_prefs.getULong("wdt_n", 0);
 }
 
 // Persist the tracked message and its session start (after creating a message).
@@ -238,6 +251,17 @@ static void saveOtaState() {
   g_prefs.putLong64("ota_chat", (int64_t)g_otaChat);
 }
 
+// Persist this boot's diagnostics: its epoch (read back by the next boot as the
+// start of this session) and the watchdog counter. Call once the clock is set,
+// so the stored epoch is real wall-clock time.
+static void saveBootStats(esp_reset_reason_t reason) {
+  if (reason == ESP_RST_TASK_WDT || reason == ESP_RST_INT_WDT || reason == ESP_RST_WDT) {
+    g_wdtReboots++;
+    g_prefs.putULong("wdt_n", g_wdtReboots);
+  }
+  g_prefs.putLong64("boot_ep", (int64_t)g_bootEpoch);
+}
+
 // ---------------------------------------------------------------------------
 // Telegram Bot API
 // ---------------------------------------------------------------------------
@@ -247,9 +271,10 @@ static bool tgApiPost(const char* method, const String& body, String& response) 
   // No server certificate validation. Simple and memory-light; acceptable for a
   // personal device. Pin Telegram's root CA here for a hardened setup.
   client.setInsecure();
+  client.setHandshakeTimeout(TLS_HANDSHAKE_S);
 
   HTTPClient https;
-  https.setTimeout(15000);
+  https.setTimeout(15000);  // response read only; the handshake has its own cap
   String url = String("https://api.telegram.org/bot") + TG_BOT_TOKEN + "/" + method;
   if (!https.begin(client, url)) {
     Serial.println("HTTPS begin() failed");
@@ -269,6 +294,11 @@ static bool tgApiPost(const char* method, const String& body, String& response) 
     Serial.printf("Telegram %s failed: %s\n", method, https.errorToString(code).c_str());
   }
   https.end();
+  // Every path above is time-bounded (handshake and read timeouts), so a request
+  // that returns here means the loop is making progress. Feed the watchdog so a
+  // burst of consecutive requests — a heartbeat edit falling back to a fresh
+  // send, or the several sends in setup() — cannot add up past WDT_TIMEOUT_S.
+  esp_task_wdt_reset();
   return ok;
 }
 
@@ -389,6 +419,7 @@ static String tgGetFilePath(const char* fileId) {
 static String otaDownloadAndFlash(const String& filePath) {
   WiFiClientSecure client;
   client.setInsecure();  // same tradeoff as tgApiPost
+  client.setHandshakeTimeout(TLS_HANDSHAKE_S);
 
   HTTPClient https;
   https.setTimeout(15000);
@@ -710,6 +741,17 @@ static void notifyAdminsBoot(esp_reset_reason_t reason) {
   msg += " (";
   msg += BUILD_STAMP;
   msg += ")";
+  // How long the previous session lasted: the span between the two boots, so it
+  // includes the few seconds a reboot takes. Absent on the first boot after
+  // flashing, when nothing is stored yet.
+  if (g_prevBootEpoch > 0 && g_bootEpoch > g_prevBootEpoch) {
+    msg += "\nPrevious session: ";
+    msg += formatDuration((uint32_t)(g_bootEpoch - g_prevBootEpoch));
+  }
+  if (g_wdtReboots > 0) {
+    msg += "\nWatchdog reboots: ";
+    msg += String(g_wdtReboots);
+  }
   // An admin who has never messaged the bot cannot be reached (Telegram forbids
   // bot-initiated chats); the send fails and is just logged by tgApiPost.
   for (size_t i = 0; i < g_adminCount; i++) {
@@ -752,6 +794,7 @@ void setup() {
   // planned muted restart instead silently resumes the existing message and
   // keeps the persistent "online since". See ADR-0008.
   esp_reset_reason_t reason = esp_reset_reason();
+  saveBootStats(reason);
   bool announce = (reason == ESP_RST_POWERON) && !g_muted;
 
   if (announce || g_onlineSinceEpoch <= 0) {

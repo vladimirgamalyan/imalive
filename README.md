@@ -146,9 +146,12 @@ you can pick them from the `/` menu instead of typing:
   previous image and reports the failure. Sending `/update` as plain text just
   replies with these instructions.
 
-On every boot the device also sends a short **silent** notice (reset reason +
-firmware version) to each admin's private chat — so soft reboots (watchdog,
-panic, OTA), which the main chat deliberately hides, are still visible to you.
+On every boot the device also sends a short **silent** notice to each admin's
+private chat — so soft reboots (watchdog, panic, OTA), which the main chat
+deliberately hides, are still visible to you. It carries the reset reason, the
+firmware version, how long the previous session lasted, and the lifetime count
+of watchdog reboots (shown once it is non-zero), which tells a one-off network
+stall apart from a systematic hang.
 
 ## Timezone
 
