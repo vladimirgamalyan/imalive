@@ -1,6 +1,6 @@
 # 0013. OTA updates via a Telegram firmware document, with boot-count rollback
 
-- Status: Accepted
+- Status: Accepted (the caption gate in §1 is amended by ADR-0016)
 - Date: 2026-07-25
 
 ## Context

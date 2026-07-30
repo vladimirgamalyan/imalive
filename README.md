@@ -20,8 +20,8 @@ alive**, and you infer the rest.
 - **One message, zero spam** — the device keeps **editing a single Telegram
   message** instead of posting new ones. Edits are silent; when power drops, the
   message freezes at the last `Last seen`, which is exactly the answer you need.
-- **OTA updates over Telegram** — send a `firmware.bin` to the bot with caption
-  `/update` and the device reflashes itself from anywhere in the world.
+- **OTA updates over Telegram** — send a `firmware.bin` to the bot and the
+  device reflashes itself from anywhere in the world.
 - **Round-clock heartbeats** — updates are phase-locked to wall-clock times
   (14:00, 14:30, …), so the timestamps are predictable at a glance.
 
@@ -139,12 +139,13 @@ you can pick them from the `/` menu instead of typing:
 - `/unmute` — arm startup notifications (the device ships muted), so the next real
   power-on pings again.
 - `/update` — over-the-air firmware update: build with `pio run`, then send
-  `.pio/build/esp32-c3-supermini/firmware.bin` to the bot as a **document with
-  caption `/update`**. The device flashes it into the spare OTA slot, reboots,
-  silently resumes its message, and replies with the new version. If the new
-  firmware fails to start three times in a row, the device rolls back to the
-  previous image and reports the failure. Sending `/update` as plain text just
-  replies with these instructions.
+  `.pio/build/esp32-c3-supermini/firmware.bin` to the bot **as a document**. Any
+  document whose name ends in `.bin` is treated as firmware — no caption needed.
+  The device flashes it into the spare OTA slot, reboots, silently resumes its
+  message, and replies with the new version. If the new firmware fails to start
+  three times in a row, the device rolls back to the previous image and reports
+  the failure. Sending `/update` as plain text just replies with these
+  instructions.
 
 On every boot the device also sends a short **silent** notice to each admin's
 private chat — so soft reboots (watchdog, panic, OTA), which the main chat

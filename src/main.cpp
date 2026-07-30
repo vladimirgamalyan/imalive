@@ -9,8 +9,8 @@
 // its last "Last seen" value. See CONCEPT.md and docs/adr/ for the rationale.
 //
 // Firmware updates over the air: an admin sends the new .bin as a Telegram
-// document captioned /update; a boot-count watchdog rolls back to the previous
-// image if the new one fails to confirm (ADR-0013).
+// document; a boot-count watchdog rolls back to the previous image if the new
+// one fails to confirm (ADR-0013, ADR-0016).
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -379,7 +379,7 @@ static void tgSetCommands() {
   u["description"] = "Re-arm startup notification";
   JsonObject o = cmds.add<JsonObject>();
   o["command"] = "update";
-  o["description"] = "OTA update (attach .bin with caption /update)";
+  o["description"] = "OTA update (just send the firmware .bin)";
   String body;
   serializeJson(doc, body);
   String response;
@@ -388,8 +388,8 @@ static void tgSetCommands() {
 
 // ---------------------------------------------------------------------------
 // OTA update (ADR-0013)
-// An admin sends the firmware .bin as a document captioned /update; it is
-// fetched via getFile and streamed into the free OTA slot. The new firmware
+// An admin sends the firmware .bin as a document (any name ending in .bin); it
+// is fetched via getFile and streamed into the free OTA slot. The new firmware
 // must confirm itself (first successful update of the tracked message) within
 // OTA_MAX_BOOTS boots, or otaCheckOnBoot() restores the previous image.
 // ---------------------------------------------------------------------------
@@ -477,8 +477,16 @@ static String otaDownloadAndFlash(const String& filePath) {
   return String();
 }
 
-// Handle an /update-captioned document from an admin: flash it into the free
-// slot and reboot into the new image. On success this function does not return.
+// True if a document name looks like a firmware image, i.e. ends in ".bin"
+// (case-insensitive). This is the whole gate for an OTA update: any such
+// document from an admin is flashed, no caption needed (ADR-0016).
+static bool isFirmwareName(const char* name) {
+  size_t n = strlen(name);
+  return n > 4 && strcasecmp(name + n - 4, ".bin") == 0;
+}
+
+// Handle a firmware document from an admin: flash it into the free slot and
+// reboot into the new image. On success this function does not return.
 static void handleOtaDocument(long long chatId, const char* fileId, long fileSize) {
   Serial.printf("OTA: update request from %lld, %ld bytes\n", chatId, fileSize);
   tgReply(chatId, "Updating: downloading " + String(fileSize / 1024) + " KB...");
@@ -677,10 +685,11 @@ static void pollCommands() {
 
     long long chatId = upd["message"]["chat"]["id"].as<long long>();
 
-    // A document captioned /update carries a firmware image (ADR-0013).
+    // Any .bin document carries a firmware image; the name is the only gate,
+    // captions are ignored (ADR-0016, amending ADR-0013).
     const char* otaFileId = upd["message"]["document"]["file_id"];
-    const char* caption = upd["message"]["caption"] | "";
-    if (otaFileId != nullptr && strncmp(caption, "/update", 7) == 0) {
+    const char* otaFileName = upd["message"]["document"]["file_name"] | "";
+    if (otaFileId != nullptr && isFirmwareName(otaFileName)) {
       handleOtaDocument(chatId, otaFileId,
                         upd["message"]["document"]["file_size"].as<long>());
       continue;
@@ -701,7 +710,7 @@ static void pollCommands() {
       tgReply(chatId, "Startup ping armed. The next real power-on will notify.");
       Serial.println("Armed startup ping");
     } else if (strncmp(text, "/update", 7) == 0) {
-      tgReply(chatId, "Attach the firmware .bin as a document with caption /update.");
+      tgReply(chatId, "Just send the firmware .bin as a document — no caption needed.");
     }
   }
 }
