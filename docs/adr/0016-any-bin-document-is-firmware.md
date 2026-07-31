@@ -1,6 +1,6 @@
 # 0016. Any .bin document from an admin is a firmware image
 
-- Status: Accepted
+- Status: Accepted (the `/update` usage reply is removed by ADR-0017)
 - Date: 2026-07-30
 
 ## Context

@@ -121,7 +121,7 @@ Watch the blue LED: once it stays solid, WiFi is up and the first message should
 arrive in your chat within a few seconds.
 
 USB flashing is only needed once — after that the device updates over the air
-(see [`/update`](#commands)).
+(see [Firmware update](#firmware-update-ota)).
 
 ## Commands
 
@@ -138,14 +138,6 @@ you can pick them from the `/` menu instead of typing:
   down. The device resumes its message silently on the next start.
 - `/unmute` — arm startup notifications (the device ships muted), so the next real
   power-on pings again.
-- `/update` — over-the-air firmware update: build with `pio run`, then send
-  `.pio/build/esp32-c3-supermini/firmware.bin` to the bot **as a document**. Any
-  document whose name ends in `.bin` is treated as firmware — no caption needed.
-  The device flashes it into the spare OTA slot, reboots, silently resumes its
-  message, and replies with the new version. If the new firmware fails to start
-  three times in a row, the device rolls back to the previous image and reports
-  the failure. Sending `/update` as plain text just replies with these
-  instructions.
 
 On every boot the device also sends a short **silent** notice to each admin's
 private chat — so soft reboots (watchdog, panic, OTA), which the main chat
@@ -153,6 +145,18 @@ deliberately hides, are still visible to you. It carries the reset reason, the
 firmware version, how long the previous session lasted, and the lifetime count
 of watchdog reboots (shown once it is non-zero), which tells a one-off network
 stall apart from a systematic hang.
+
+## Firmware update (OTA)
+
+There is no update command: build with `pio run`, then send
+`.pio/build/esp32-c3-supermini/firmware.bin` to the bot **as a document**. Any
+document from an admin whose name ends in `.bin` is treated as firmware — no
+command, no caption.
+
+The device flashes it into the spare OTA slot, reboots, silently resumes its
+message, and replies with the new version. If the new firmware fails to start
+three times in a row, the device rolls back to the previous image and reports
+the failure.
 
 ## Timezone
 

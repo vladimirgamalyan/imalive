@@ -377,9 +377,6 @@ static void tgSetCommands() {
   JsonObject u = cmds.add<JsonObject>();
   u["command"] = "unmute";
   u["description"] = "Re-arm startup notification";
-  JsonObject o = cmds.add<JsonObject>();
-  o["command"] = "update";
-  o["description"] = "OTA update (just send the firmware .bin)";
   String body;
   serializeJson(doc, body);
   String response;
@@ -709,8 +706,6 @@ static void pollCommands() {
       saveMuted();
       tgReply(chatId, "Startup ping armed. The next real power-on will notify.");
       Serial.println("Armed startup ping");
-    } else if (strncmp(text, "/update", 7) == 0) {
-      tgReply(chatId, "Just send the firmware .bin as a document — no caption needed.");
     }
   }
 }
