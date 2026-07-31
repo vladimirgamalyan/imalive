@@ -12,7 +12,10 @@
 #define TG_BOT_TOKEN   "123456789:ABCdefGhIJKlmNoPQRstuVWxyz"
 // Destination chat: a personal chat (positive numeric id) or a channel
 // ("-100..." or "@channel"). For a channel, add the bot as an administrator
-// with post permission.
+// with post permission. Prefer the numeric "-100..." form: a "@channel" username
+// resolves only while the channel is public, and making it private drops the
+// username, after which every API call fails with "chat not found". To find the
+// numeric id, forward a channel post to @userinfobot.
 #define TG_CHAT_ID     "123456789"
 // User IDs allowed to send commands (/status, /mute, /unmute). Commands from any
 // other sender are ignored. At least one id is required. Find yours via
