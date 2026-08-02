@@ -232,8 +232,10 @@ Practical notes:
   and posts a new one only on a real, un-muted power cycle; earlier messages freeze
   in place. In a channel this accumulates one frozen message per power cycle per
   device — the intended history.
-- If a device's message is deleted or is past its edit window, the next edit fails
-  and the fallback (ADR-0004) posts a fresh **silent** message to continue from.
+- If a device's message is deleted or is past its edit window, Telegram rejects the
+  next edit and the fallback (ADR-0004) posts a fresh **silent** message to continue
+  from. A network failure is not a rejection and never rotates the message
+  (ADR-0018).
 
 ## 7. Edge cases and limitations (deliberate tradeoffs)
 
@@ -258,10 +260,13 @@ Practical notes:
    a **channel** post has **no** such limit. So in a private chat the heartbeat's
    edits start failing ~48 h after a message was posted; in a channel the same post
    is edited indefinitely.
-   **Fallback:** if `editMessageText` returns an error (cannot edit) — send a fresh
-   message **silently** (`disable_notification`) and keep editing that one. Net
-   effect: a private-chat recipient accumulates roughly one silent message every
-   ~2 days; a channel recipient does not.
+   **Fallback:** if `editMessageText` is **rejected** by Telegram (HTTP 400 —
+   cannot edit) — send a fresh message **silently** (`disable_notification`) and
+   keep editing that one. A transient failure (no connection, 5xx, flood wait) is
+   retried and then left for the next heartbeat, so it costs a stale "Last seen"
+   rather than an extra message (ADR-0018). Net effect: a private-chat recipient
+   accumulates roughly one silent message every ~2 days; a channel recipient does
+   not.
 
 5. **Telegram rate limits.** Edits every 30–60 minutes are far within the limits;
    no issues expected.

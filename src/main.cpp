@@ -42,6 +42,11 @@ static const uint32_t CMD_POLL_MS = 4000;       // /status command poll interval
 // watchdog period, so a stalled handshake (link up but no packets getting
 // through) reboots the device instead of failing the request.
 static const uint32_t TLS_HANDSHAKE_S = 10;
+// Retries for a heartbeat edit that failed for a transient reason (ADR-0018).
+// Worst case 3 * TLS_HANDSHAKE_S + 2 * EDIT_RETRY_MS ~= 34 s, so the burst fits
+// inside a one-minute heartbeat and every request feeds the watchdog itself.
+static const int EDIT_ATTEMPTS = 3;
+static const uint32_t EDIT_RETRY_MS = 2000;
 
 // Heartbeat edits are phase-locked to wall-clock multiples of HEARTBEAT_MIN when
 // HEARTBEAT_ALIGN is on and the interval divides an hour evenly (so 5/10/15/30/60
@@ -266,7 +271,14 @@ static void saveBootStats(esp_reset_reason_t reason) {
 // Telegram Bot API
 // ---------------------------------------------------------------------------
 
-static bool tgApiPost(const char* method, const String& body, String& response) {
+// Posts to the Bot API. When httpCode is given it receives the HTTP status, or 0
+// if the request never got an answer — that is what tells a rejection by Telegram
+// apart from a network failure (ADR-0018).
+static bool tgApiPost(const char* method, const String& body, String& response,
+                      int* httpCode = nullptr) {
+  if (httpCode) {
+    *httpCode = 0;
+  }
   WiFiClientSecure client;
   // No server certificate validation. Simple and memory-light; acceptable for a
   // personal device. Pin Telegram's root CA here for a hardened setup.
@@ -283,6 +295,9 @@ static bool tgApiPost(const char* method, const String& body, String& response) 
   https.addHeader("Content-Type", "application/json");
 
   int code = https.POST(body);
+  if (httpCode) {
+    *httpCode = code;
+  }
   bool ok = false;
   if (code > 0) {
     response = https.getString();
@@ -344,8 +359,14 @@ static void tgReply(long long chatId, const String& text, bool silent = false) {
   tgSendPrepared(doc);
 }
 
-// Edit an existing message in place; returns true on success.
-static bool tgEditMessage(long messageId, const String& text) {
+// Why an edit did not go through. Only EDIT_REJECTED — Telegram answered "400
+// Bad Request", so the message is deleted or past its edit window — justifies
+// posting a fresh one; EDIT_TRANSIENT means the message is still fine and the
+// request never reached Telegram (ADR-0018).
+enum EditResult { EDIT_OK, EDIT_TRANSIENT, EDIT_REJECTED };
+
+// Edit an existing message in place.
+static EditResult tgEditMessage(long messageId, const String& text) {
   JsonDocument doc;
   doc["chat_id"] = TG_CHAT_ID;
   doc["message_id"] = messageId;
@@ -354,13 +375,32 @@ static bool tgEditMessage(long messageId, const String& text) {
   serializeJson(doc, body);
 
   String response;
-  if (tgApiPost("editMessageText", body, response)) {
-    return true;
+  int httpCode = 0;
+  if (tgApiPost("editMessageText", body, response, &httpCode)) {
+    return EDIT_OK;
   }
   // Telegram rejects an edit whose text equals the current message content with
   // "message is not modified". That means the message already shows what we want,
   // so treat it as success rather than posting a fresh message.
-  return response.indexOf("message is not modified") >= 0;
+  if (response.indexOf("message is not modified") >= 0) {
+    return EDIT_OK;
+  }
+  return (httpCode == HTTP_CODE_BAD_REQUEST) ? EDIT_REJECTED : EDIT_TRANSIENT;
+}
+
+// Edit the tracked message, retrying a transient failure a few times. Returns
+// EDIT_TRANSIENT only when every attempt failed that way, so the caller can skip
+// this update instead of spending a fresh message on a network hiccup.
+static EditResult tgEditWithRetry(long messageId, const String& text) {
+  EditResult result = EDIT_TRANSIENT;
+  for (int i = 0; i < EDIT_ATTEMPTS && result == EDIT_TRANSIENT; i++) {
+    if (i > 0) {
+      delay(EDIT_RETRY_MS);
+      esp_task_wdt_reset();
+    }
+    result = tgEditMessage(messageId, text);
+  }
+  return result;
 }
 
 // Register the bot's command menu (setMyCommands) so the commands are discoverable
@@ -810,11 +850,15 @@ void setup() {
 
   String text = buildMessage(formatLocalTime());
 
-  // Continuation first: try to resume (edit) the existing message silently.
-  bool resumed = !announce && g_messageId > 0 && tgEditMessage(g_messageId, text);
-  bool messageOk = resumed;
+  // Continuation first: try to resume (edit) the existing message silently. An
+  // announcing power-on skips straight to a new notifying message, so it enters
+  // the send path as a rejection.
+  EditResult resume = (!announce && g_messageId > 0)
+      ? tgEditWithRetry(g_messageId, text)
+      : EDIT_REJECTED;
+  bool messageOk = (resume == EDIT_OK);
 
-  if (!resumed) {
+  if (resume == EDIT_REJECTED) {
     // A new message is needed. It carries a notification only on an armed
     // power-on; every other case (soft reboot, muted, or a missing message) is
     // sent silently, exactly like a heartbeat edit.
@@ -835,8 +879,12 @@ void setup() {
     } else {
       Serial.println("Initial send failed; heartbeat will retry.");
     }
-  } else {
+  } else if (resume == EDIT_OK) {
     Serial.printf("Resumed message id %ld\n", g_messageId);
+  } else {
+    // Transient (ADR-0018): the tracked message is intact but unreachable right
+    // now; the heartbeat resumes it instead of posting a duplicate.
+    Serial.printf("Resume failed; heartbeat will retry message id %ld\n", g_messageId);
   }
 
   if (messageOk) {
@@ -877,17 +925,24 @@ void loop() {
     String lastSeen = formatLocalTime();
     String text = buildMessage(lastSeen);
 
-    bool ok = (g_messageId > 0) && tgEditMessage(g_messageId, text);
-    if (!ok) {
+    // Having no tracked message at all (the initial send failed) counts as a
+    // rejection: there is nothing to edit, so a fresh message is due.
+    EditResult edit = (g_messageId > 0) ? tgEditWithRetry(g_messageId, text) : EDIT_REJECTED;
+    bool ok = (edit == EDIT_OK);
+    if (edit == EDIT_REJECTED) {
       // Fallback (ADR-0004): message too old to edit, or never sent — send a
       // fresh one silently (no restart happened) and keep editing that one.
-      Serial.println("Edit failed; sending a fresh (silent) message.");
+      Serial.println("Edit rejected; sending a fresh (silent) message.");
       long newId = tgSendMessage(text, true);
       if (newId > 0) {
         g_messageId = newId;
         saveSession();
         ok = true;
       }
+    } else if (!ok) {
+      // Transient (ADR-0018): the message is intact, so keep it and try again at
+      // the next heartbeat rather than spending a new message on a hiccup.
+      Serial.println("Edit failed; keeping the message and retrying next heartbeat.");
     }
     if (ok) {
       otaReportOnline();  // resolve a pending update now that Telegram works
